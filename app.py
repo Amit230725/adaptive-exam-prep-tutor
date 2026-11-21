@@ -598,7 +598,7 @@ with st.sidebar:
 
 tab_dash, tab_diag, tab_practice, tab_lab, tab_eval, tab_teacher, tab_about = st.tabs([
     "🏠 Dashboard",
-    "📝 Diagnostic Test",
+    "🚀 Start Test",
     "🎯 Adaptive Practice",
     "⚡ Virtual Laboratory",
     "📜 Final Evaluation & Result",
@@ -690,6 +690,97 @@ with tab_dash:
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
+    # =========================================================================
+    # DEDICATED SECTION: 🚀 START DIAGNOSTIC TEST (User Request)
+    # =========================================================================
+    st.markdown("""
+    <div class="dribbble-card" style="border: 2px solid #2563EB; background: linear-gradient(135deg, #EFF6FF 0%, #FFFFFF 50%, #F8FAFC 100%); padding: 24px 28px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+        <div>
+          <span class="chip chip-ai">MANDATORY ORGANISER COMPONENT 1</span>
+          <span class="chip chip-verified">CBSE BENCHMARK EVALUATION</span>
+          <h3 style="margin: 8px 0 4px 0; font-size: 22px; color:#0F172A;">🚀 Start CBSE Physics Diagnostic Test</h3>
+          <p style="margin:0; color:#475569; font-size:14px; max-width:85ch;">
+            Begin the standardized 8-question benchmark assessment. ConceptPilot prompts you for a <b>one-line physical reasoning explanation</b> 
+            on every question to diagnose latent mental models and research misconceptions before starting adaptive practice.
+          </p>
+        </div>
+        <div style="text-align:right;">
+          <span style="background:#DBEAFE; color:#1E40AF; font-size:12px; font-weight:700; padding:6px 14px; border-radius:20px; white-space:nowrap;">
+            ⏱️ ~10 Mins · 8 Questions
+          </span>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if s.phase == "diag":
+        st.info(f"📝 **Diagnostic Test Currently in Progress:** Question {s.diag_idx + 1} of {len(s.diag_questions)}")
+        c_diag1, c_diag2 = st.columns([1, 1])
+        with c_diag1:
+            if st.button("Resume Diagnostic Test ➡️", type="primary", use_container_width=True, key="dash_resume_test"):
+                s.phase = "diag"
+                st.rerun()
+        with c_diag2:
+            if st.button("Restart Diagnostic Test 🔄", use_container_width=True, key="dash_restart_test"):
+                s.phase = "diag"
+                s.diag_idx = 0
+                s.diag_misconceptions_found = []
+                s.diag_questions = get_diagnostic_questions(s.active_chapter if s.active_chapter != "all" else None)
+                st.rerun()
+
+    elif s.phase in ("diag_summary", "adapt"):
+        st.success(f"✅ **Baseline Diagnostic Assessment Completed!** Starting Mastery: **{eval_score}%** (Grade Track: **{eval_grade.split('·')[0].strip()}**)")
+        c_comp1, c_comp2 = st.columns([1, 1])
+        with c_comp1:
+            if st.button("Retake Baseline Diagnostic Test 🔄", use_container_width=True, key="dash_retake_test"):
+                s.phase = "diag"
+                s.diag_idx = 0
+                s.diag_misconceptions_found = []
+                s.diag_questions = get_diagnostic_questions(s.active_chapter if s.active_chapter != "all" else None)
+                st.rerun()
+        with c_comp2:
+            if st.button("Continue Adaptive Practice 🎯", type="primary", use_container_width=True, key="dash_continue_practice"):
+                s.phase = "adapt"
+                s.current_q = None
+                st.rerun()
+
+    else:
+        with st.form("dash_start_test_form"):
+            f_col1, f_col2, f_col3 = st.columns([1, 1, 2])
+            with f_col1:
+                dash_nick = st.text_input("Candidate Nickname:", value=s.nickname or "Aarav")
+            with f_col2:
+                dash_cls = st.text_input("Class Section:", value=s.class_code or "CLASS-10A")
+            with f_col3:
+                scope_choices_map = {
+                    "all": "🌐 Full Physics (8 Balanced Cross-Chapter Questions)",
+                    "light": "💡 Ch 9: Light (Mirrors & Lenses)",
+                    "human_eye": "👁️ Ch 10: Human Eye & Colourful World",
+                    "electricity": "⚡ Ch 11: Electricity",
+                    "magnetism": "🧲 Ch 12: Magnetic Effects of Electric Current",
+                }
+                dash_scope = st.selectbox(
+                    "Select Syllabus Focus for Test:",
+                    options=list(scope_choices_map.keys()),
+                    format_func=lambda x: scope_choices_map[x],
+                    index=0,
+                )
+            
+            dash_start_btn = st.form_submit_button("Launch Diagnostic Test Now 🚀", type="primary", use_container_width=True)
+            if dash_start_btn:
+                s.nickname = dash_nick.strip() or "Aarav"
+                s.class_code = dash_cls.strip() or "CLASS-10A"
+                s.active_chapter = dash_scope
+                save_student(s.student_id, s.nickname, s.class_code)
+                s.diag_questions = get_diagnostic_questions(dash_scope if dash_scope != "all" else None)
+                s.diag_idx = 0
+                s.diag_misconceptions_found = []
+                s.phase = "diag"
+                st.rerun()
+
+    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+
     # Middle Row: Learning Activity Chart (Left) + Skill Progress Bars (Right)
     act_col, skill_col = st.columns([3, 2])
     
@@ -751,8 +842,8 @@ with tab_dash:
           </div>
         """, unsafe_allow_html=True)
         radar_scope_cids = CHAPTERS[s.active_chapter]["concepts"] if s.active_chapter != "all" else None
-        dash_radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=radar_scope_cids, width=460, height=340)
-        st.components.v1.html(dash_radar_svg, height=360)
+        dash_radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=radar_scope_cids, width=540, height=440)
+        st.components.v1.html(dash_radar_svg, height=450)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with sch_col:
@@ -1067,8 +1158,8 @@ with tab_diag:
             st.markdown("### 🎯 Cognitive Mastery Radar")
             st.caption("Competency profile against 70% CBSE target threshold:")
             c_keys = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
-            radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=c_keys, width=480, height=360)
-            st.components.v1.html(radar_svg, height=380)
+            radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=c_keys, width=540, height=440)
+            st.components.v1.html(radar_svg, height=450)
 
         st.markdown("---")
         st.markdown("### 🔍 Diagnostic Findings & Early Misconceptions")
@@ -1702,8 +1793,8 @@ with tab_teacher:
             with tab_radar:
                 st.caption("Class-wide average competency vector compared against 70% proficiency target:")
                 c_scope_keys = concept_ids if teacher_scope != "all" else None
-                cohort_radar_svg = generate_mastery_radar_chart_svg(avg_mastery.to_dict(), concept_keys=c_scope_keys, width=500, height=380)
-                st.components.v1.html(cohort_radar_svg, height=400)
+                cohort_radar_svg = generate_mastery_radar_chart_svg(avg_mastery.to_dict(), concept_keys=c_scope_keys, width=540, height=440)
+                st.components.v1.html(cohort_radar_svg, height=450)
 
             st.markdown("---")
 
@@ -1737,8 +1828,8 @@ with tab_teacher:
                 with st_col1:
                     st.markdown(f"**Cognitive Radar: {selected_student_name}**")
                     student_mastery_dict = {cid: float(sel_row[cid]) for cid in concept_ids}
-                    s_radar_svg = generate_mastery_radar_chart_svg(student_mastery_dict, concept_keys=c_scope_keys, width=440, height=340)
-                    st.components.v1.html(s_radar_svg, height=360)
+                    s_radar_svg = generate_mastery_radar_chart_svg(student_mastery_dict, concept_keys=c_scope_keys, width=540, height=440)
+                    st.components.v1.html(s_radar_svg, height=450)
                 with st_col2:
                     st.markdown("##### 📌 Diagnostic Profile")
                     s_avg = sel_row[concept_ids].mean()

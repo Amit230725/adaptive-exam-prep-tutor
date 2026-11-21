@@ -13,8 +13,8 @@ from core.concepts import CONCEPTS, CHAPTERS
 def generate_mastery_radar_chart_svg(
     mastery_dict: Dict[str, float],
     concept_keys: Optional[List[str]] = None,
-    width: int = 500,
-    height: int = 420,
+    width: int = 540,
+    height: int = 440,
 ) -> str:
     """
     Generates a pure SVG multi-axis Radar/Spider chart representing the student's
@@ -22,7 +22,6 @@ def generate_mastery_radar_chart_svg(
     Lightweight, crisp on retina/mobile screens, zero heavy charting dependencies.
     """
     if not concept_keys:
-        # Default to provided keys if <= 8, else electricity chapter defaults
         available = [k for k in mastery_dict.keys() if k in CONCEPTS]
         if available and len(available) <= 8:
             concept_keys = available
@@ -38,19 +37,22 @@ def generate_mastery_radar_chart_svg(
         valid_keys = list(CONCEPTS.keys())[:8]
 
     n_axes = len(valid_keys)
-    cx, cy = width / 2, height / 2 + 10
+    cx = width / 2
+    # Provide generous headroom at the top so top vertex label never collides with legend
+    cy = (height - 50) / 2 + 25
     
     # Scale radius and font size according to number of axes
     if n_axes > 10:
-        radius = min(width, height) * 0.31
+        radius = min(width, height) * 0.27
         font_sz = 9
     else:
-        radius = min(width, height) * 0.36
+        radius = min(width, height) * 0.30
         font_sz = 11
 
     # Concentric background grid polygons (25%, 50%, 75%, 100%)
     grid_svg = []
-    for level in [0.25, 0.50, 0.75, 1.0]:
+    scale_labels = []
+    for level, pct_str in [(0.25, "25%"), (0.50, "50%"), (0.75, "75%"), (1.0, "100%")]:
         r_level = radius * level
         pts = []
         for i in range(n_axes):
@@ -58,9 +60,11 @@ def generate_mastery_radar_chart_svg(
             x = cx + r_level * math.cos(angle)
             y = cy + r_level * math.sin(angle)
             pts.append(f"{x:.1f},{y:.1f}")
-        stroke_color = "#D1D5DB" if level < 1.0 else "#9CA3AF"
+        stroke_color = "#E2E8F0" if level < 1.0 else "#CBD5E1"
         dash = 'stroke-dasharray="3,3"' if level in [0.25, 0.75] else ""
-        grid_svg.append(f'<polygon points="{" ".join(pts)}" fill="none" stroke="{stroke_color}" stroke-width="1" {dash} />')
+        grid_svg.append(f'<polygon points="{" ".join(pts)}" fill="none" stroke="{stroke_color}" stroke-width="1.2" {dash} />')
+        # Subtle scale marker on top spoke
+        scale_labels.append(f'<text x="{cx + 5:.1f}" y="{cy - r_level + 9:.1f}" font-family="Inter, sans-serif" font-size="8.5" fill="#94A3B8" font-weight="500">{pct_str}</text>')
 
     # Axis spokes and labels
     spokes_svg = []
@@ -72,7 +76,7 @@ def generate_mastery_radar_chart_svg(
         # Spoke line
         x_end = cx + radius * math.cos(angle)
         y_end = cy + radius * math.sin(angle)
-        spokes_svg.append(f'<line x1="{cx}" y1="{cy}" x2="{x_end:.1f}" y2="{y_end:.1f}" stroke="#E5E7EB" stroke-width="1.2" />')
+        spokes_svg.append(f'<line x1="{cx}" y1="{cy}" x2="{x_end:.1f}" y2="{y_end:.1f}" stroke="#E2E8F0" stroke-width="1.2" />')
 
         # Data polygon point
         m_val = max(0.05, min(1.0, mastery_dict.get(cid, 0.3)))
@@ -81,42 +85,48 @@ def generate_mastery_radar_chart_svg(
         y_data = cy + r_data * math.sin(angle)
         data_points.append(f"{x_data:.1f},{y_data:.1f}")
 
-        # Text label with percentage
-        r_label = radius * (1.26 if n_axes > 10 else 1.22)
-        x_label = cx + r_label * math.cos(angle)
-        y_label = cy + r_label * math.sin(angle)
-        
-        # Abbreviate concept title for clean display
+        # Text label with percentage - positioned cleanly outside vertex with proper anchor
         c_name = CONCEPTS[cid]["name"].split("&")[0].split("(")[0].replace(" Circuits", "").replace("Spherical ", "").strip()
         pct_text = f"{int(m_val * 100)}%"
         
-        # Determine anchor
-        if abs(math.cos(angle)) < 0.2:
-            anchor = "middle"
-        elif math.cos(angle) > 0:
-            anchor = "start"
-        else:
-            anchor = "end"
-
         # Label color based on threshold
-        color = "#1B998B" if m_val >= 0.70 else "#F4A300" if m_val >= 0.40 else "#D1495B"
+        color = "#10B981" if m_val >= 0.70 else "#F59E0B" if m_val >= 0.40 else "#EF4444"
+
+        # Direction-aware label positioning
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        if abs(cos_a) < 0.2:
+            # Top or bottom vertex
+            anchor = "middle"
+            x_label = cx
+            y_label = (cy - radius - 14) if sin_a < 0 else (cy + radius + 18)
+        elif cos_a > 0:
+            # Right side
+            anchor = "start"
+            x_label = x_end + 12
+            y_label = y_end + 4
+        else:
+            # Left side
+            anchor = "end"
+            x_label = x_end - 12
+            y_label = y_end + 4
 
         labels_svg.append(f'''
-            <text x="{x_label:.1f}" y="{y_label:.1f}" text-anchor="{anchor}" font-family="Inter, sans-serif" font-size="{font_sz}" font-weight="600" fill="#14213D">
+            <text x="{x_label:.1f}" y="{y_label:.1f}" text-anchor="{anchor}" font-family="Inter, sans-serif" font-size="{font_sz}" font-weight="600" fill="#0F172A">
                 {c_name} <tspan fill="{color}" font-weight="700">({pct_text})</tspan>
             </text>
         ''')
 
-    # Student Mastery polygon
-    data_poly = f'<polygon points="{" ".join(data_points)}" fill="rgba(244, 163, 0, 0.35)" stroke="#F4A300" stroke-width="2.5" />'
+    # Student Mastery polygon with gradient fill
+    data_poly = f'<polygon points="{" ".join(data_points)}" fill="url(#masteryPolyGrad)" stroke="#2563EB" stroke-width="2.5" />'
 
     # Mastery data point circles
     circles_svg = []
     for pt in data_points:
         px, py = pt.split(",")
-        circles_svg.append(f'<circle cx="{px}" cy="{py}" r="4.0" fill="#F4A300" stroke="#FFFFFF" stroke-width="1.5" />')
+        circles_svg.append(f'<circle cx="{px}" cy="{py}" r="4.5" fill="#2563EB" stroke="#FFFFFF" stroke-width="2" />')
 
-    # Target Benchmark line (70% mastery boundary in subtle green)
+    # Target Benchmark line (70% mastery boundary in emerald dashed green)
     target_points = []
     for i in range(n_axes):
         angle = (2 * math.pi / n_axes) * i - (math.pi / 2)
@@ -124,15 +134,22 @@ def generate_mastery_radar_chart_svg(
         xt = cx + r_t * math.cos(angle)
         yt = cy + r_t * math.sin(angle)
         target_points.append(f"{xt:.1f},{yt:.1f}")
-    target_poly = f'<polygon points="{" ".join(target_points)}" fill="none" stroke="#1B998B" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.75" />'
+    target_poly = f'<polygon points="{" ".join(target_points)}" fill="none" stroke="#10B981" stroke-width="2" stroke-dasharray="5,4" opacity="0.9" />'
 
     svg_content = f"""
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" style="max-width:100%; height:auto; display:block; margin:auto;">
+        <defs>
+            <linearGradient id="masteryPolyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#2563EB" stop-opacity="0.45" />
+                <stop offset="100%" stop-color="#3B82F6" stop-opacity="0.15" />
+            </linearGradient>
+        </defs>
         <style>
-            .legend-text {{ font-family: 'Inter', sans-serif; font-size: 11px; fill: #4B5563; }}
+            .legend-text {{ font-family: 'Inter', sans-serif; font-size: 11px; fill: #334155; font-weight: 600; }}
         </style>
-        <!-- Background Grids -->
+        <!-- Background Grids & Scale -->
         {''.join(grid_svg)}
+        {''.join(scale_labels)}
         <!-- Spokes -->
         {''.join(spokes_svg)}
         <!-- Target 70% Mastery Threshold -->
@@ -142,12 +159,13 @@ def generate_mastery_radar_chart_svg(
         {''.join(circles_svg)}
         <!-- Labels -->
         {''.join(labels_svg)}
-        <!-- Legend -->
-        <g transform="translate({cx - 130}, 20)">
-            <rect x="0" y="0" width="12" height="12" fill="rgba(37, 99, 235, 0.4)" stroke="#2563EB" stroke-width="1.5" rx="2" />
-            <text x="18" y="10" class="legend-text">Your Mastery</text>
-            <line x1="110" y1="6" x2="130" y2="6" stroke="#10B981" stroke-width="2" stroke-dasharray="3,3" />
-            <text x="136" y="10" class="legend-text">70% Target Threshold</text>
+        <!-- Legend: Clean pill placed at the bottom, completely separated from top labels -->
+        <g transform="translate({cx - 140:.1f}, {height - 24})">
+            <rect x="-10" y="-12" width="280" height="26" rx="13" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1" />
+            <rect x="8" y="-5" width="12" height="12" rx="3" fill="rgba(37, 99, 235, 0.45)" stroke="#2563EB" stroke-width="1.8" />
+            <text x="26" y="5" class="legend-text">Your Mastery</text>
+            <line x1="120" y1="1" x2="150" y2="1" stroke="#10B981" stroke-width="2.5" stroke-dasharray="4,3" />
+            <text x="158" y="5" class="legend-text">70% Target</text>
         </g>
     </svg>
     """
