@@ -57,6 +57,11 @@ from core.ai import (
     get_api_key,
     get_model_name,
 )
+from core.visuals import (
+    generate_mastery_radar_chart_svg,
+    simulate_circuit,
+    CONCEPT_STUDY_CARDS,
+)
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION & STYLING
@@ -460,6 +465,39 @@ with tab_student:
                 else:
                     st.warning("Please choose a nickname to continue.")
 
+        # Hackathon Judge / Rapid Evaluation Presets (Instant Testing)
+        with st.expander("⚡ Hackathon Judges & Fast Evaluation Presets (Click to Auto-Load)"):
+            st.caption("Instantly test specific learner states without manually answering all 8 diagnostic questions:")
+            p_col1, p_col2 = st.columns(2)
+            with p_col1:
+                if st.button("Preset: Parallel Circuit Gap (Holds M5)", use_container_width=True):
+                    s.nickname = "Judge (Parallel Gap)"
+                    s.class_code = "CLASS-10A"
+                    save_student(s.student_id, s.nickname, s.class_code)
+                    s.mastery = {
+                        "charge": 0.85, "current": 0.70, "pd": 0.65, "ohm": 0.70,
+                        "resistance": 0.60, "series": 0.65, "parallel": 0.30, "power": 0.60
+                    }
+                    s.active_misconceptions["parallel"] = "M5"
+                    for c in CONCEPTS:
+                        save_mastery_state(s.student_id, c, s.mastery[c], 1.5, 1.5, 1)
+                    s.phase = "adapt"
+                    st.rerun()
+            with p_col2:
+                if st.button("Preset: Series Circuit Gap (Holds M1)", use_container_width=True):
+                    s.nickname = "Judge (Series Gap)"
+                    s.class_code = "CLASS-10A"
+                    save_student(s.student_id, s.nickname, s.class_code)
+                    s.mastery = {
+                        "charge": 0.80, "current": 0.40, "pd": 0.60, "ohm": 0.55,
+                        "resistance": 0.50, "series": 0.35, "parallel": 0.60, "power": 0.50
+                    }
+                    s.active_misconceptions["series"] = "M1"
+                    for c in CONCEPTS:
+                        save_mastery_state(s.student_id, c, s.mastery[c], 1.5, 1.5, 1)
+                    s.phase = "adapt"
+                    st.rerun()
+
     # -------------------------------------------------------------------------
     # SCREEN 2: DIAGNOSTIC TEST (8 Questions, Prerequisite Order)
     # -------------------------------------------------------------------------
@@ -593,42 +631,48 @@ with tab_student:
         
         col_g1, col_g2 = st.columns([1, 1])
         with col_g1:
-            st.markdown("### Visual Concept Hierarchy")
-            st.caption("Colors indicate starting mastery: 🟢 Mastered (≥70%) · 🟡 Developing (40-69%) · 🔴 Gap (<40%)")
+            st.markdown("### 🕸️ Visual Prerequisite Graph")
+            st.caption("Prerequisite DAG: 🟢 Mastered (≥70%) · 🟡 Developing (40-69%) · 🔴 Gap (<40%)")
             dot_str = render_concept_graph(s.mastery)
             st.graphviz_chart(dot_str, use_container_width=True)
             
         with col_g2:
-            st.markdown("### Diagnostic Findings")
-            
-            # Identify weakest concepts
-            sorted_concepts = sorted(s.mastery.items(), key=lambda kv: kv[1])
-            weakest = sorted_concepts[0]
-            st.warning(f"⚠️ **Priority Focus Area:** {CONCEPTS[weakest[0]]['name']} ({int(weakest[1] * 100)}% starting mastery)")
-            
-            if s.diag_misconceptions_found:
-                st.markdown("#### Detected Misconceptions in Reasoning:")
-                for m_found in s.diag_misconceptions_found:
-                    mid = m_found["mid"]
-                    m_data = MISCONCEPTIONS[mid]
-                    st.markdown(f"""
-                    <div style="background:#FFF1F2; border-left:4px solid #D1495B; padding:10px 14px; border-radius:6px; margin-bottom:8px;">
-                      <b>{m_data['label']}</b> (Topic: {CONCEPTS[m_found['concept']]['name']})<br>
-                      <small style="color:#6B7280;"><i>"{m_found['evidence']}"</i></small><br>
-                      <span style="color:#14213D;font-weight:500;">Correction:</span> {m_data['correction']}
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.success("✅ **No major foundational misconceptions detected!** Ready for advanced practice.")
+            st.markdown("### 🎯 Cognitive Mastery Radar")
+            st.caption("8-axis competency profile against 70% CBSE target threshold:")
+            radar_svg = generate_mastery_radar_chart_svg(s.mastery, width=480, height=360)
+            st.components.v1.html(radar_svg, height=380)
 
-            st.markdown("---")
-            if st.button("Begin Adaptive Practice 🚀", type="primary", use_container_width=True):
-                s.phase = "adapt"
-                s.current_q = None
-                s.attempt = 0
-                s.last_result = None
-                s.last_diagnosis = None
-                st.rerun()
+        st.markdown("---")
+        st.markdown("### 🔍 Diagnostic Findings & Early Misconceptions")
+        
+        # Identify weakest concepts
+        sorted_concepts = sorted(s.mastery.items(), key=lambda kv: kv[1])
+        weakest = sorted_concepts[0]
+        st.warning(f"⚠️ **Priority Focus Area:** {CONCEPTS[weakest[0]]['name']} ({int(weakest[1] * 100)}% starting mastery)")
+        
+        if s.diag_misconceptions_found:
+            st.markdown("#### Detected Misconceptions in Reasoning:")
+            for m_found in s.diag_misconceptions_found:
+                mid = m_found["mid"]
+                m_data = MISCONCEPTIONS[mid]
+                st.markdown(f"""
+                <div style="background:#FFF1F2; border-left:4px solid #D1495B; padding:10px 14px; border-radius:6px; margin-bottom:8px;">
+                  <b>{m_data['label']}</b> (Topic: {CONCEPTS[m_found['concept']]['name']})<br>
+                  <small style="color:#6B7280;"><i>"{m_found['evidence']}"</i></small><br>
+                  <span style="color:#14213D;font-weight:500;">Correction:</span> {m_data['correction']}
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.success("✅ **No major foundational misconceptions detected!** Ready for advanced practice.")
+
+        st.markdown("---")
+        if st.button("Begin Adaptive Practice 🚀", type="primary", use_container_width=True):
+            s.phase = "adapt"
+            s.current_q = None
+            s.attempt = 0
+            s.last_result = None
+            s.last_diagnosis = None
+            st.rerun()
 
     # -------------------------------------------------------------------------
     # SCREEN 4: ADAPTIVE PRACTICE LOOP
@@ -691,10 +735,25 @@ with tab_student:
         diff_chip_class = "chip-easy" if diff_label == 1 else "chip-med" if diff_label == 2 else "chip-hard"
         diff_text = "LEVEL 1 · FOUNDATIONAL" if diff_label == 1 else "LEVEL 2 · APPLICATION" if diff_label == 2 else "LEVEL 3 · SYNTHESIS"
 
+        # Calculate student rank badge based on overall syllabus mastery
+        avg_m = sum(s.mastery.values()) / len(s.mastery)
+        if avg_m >= 0.85:
+            badge_icon, badge_title = "🏆", "Kirchhoff Scholar"
+        elif avg_m >= 0.70:
+            badge_icon, badge_title = "⚡", "Ohm's Pioneer"
+        elif avg_m >= 0.50:
+            badge_icon, badge_title = "🔋", "Circuit Builder"
+        else:
+            badge_icon, badge_title = "🔌", "Circuit Novice"
+
+        current_streak = max([s.schedule[c].get("streak", 0) for c in CONCEPTS] or [0])
+        streak_chip = f'<span class="chip" style="background:#FFFBEB;color:#B45309;border:1px solid #FCD34D;">🔥 {current_streak} STREAK</span>' if current_streak > 0 else ""
+        badge_chip = f'<span class="chip" style="background:#F0FDF4;color:#166534;border:1px solid #BBF7D0;">{badge_icon} {badge_title} ({int(avg_m*100)}%)</span>'
+
         # Selection Rationale Banner (Section 6.3)
         st.markdown(f"""
         <div class="cp-banner">
-          🎯 <b>Why this question was chosen:</b> {s.selection_reason}
+          🎯 <b>{T.get('why_chosen', 'Why this question was chosen:')}</b> {s.selection_reason}
         </div>
         """, unsafe_allow_html=True)
 
@@ -711,6 +770,8 @@ with tab_student:
           <div style="margin-bottom: 8px;">
             <span class="chip {diff_chip_class}">{diff_text}</span>
             <span class="chip chip-bank">{c_name}</span>
+            {badge_chip}
+            {streak_chip}
             {source_chip}
           </div>
           <h3 style="margin-top:4px;">{q['question']}</h3>
@@ -928,10 +989,73 @@ with tab_student:
                 s.probe_question = None
                 st.rerun()
 
-        # Live Concept Graph Expander
-        with st.expander("📊 View Live Concept Graph (Color = Mastery)"):
-            dot_str = render_concept_graph(s.mastery)
-            st.graphviz_chart(dot_str, use_container_width=True)
+        # 1. Live Visual Mastery Suite (Graph + Radar)
+        with st.expander("📊 View Live Mastery Visuals (Prerequisite Graph & Cognitive Radar)"):
+            vis_tab1, vis_tab2 = st.tabs(["🎯 8-Axis Cognitive Radar", "🕸️ Prerequisite Knowledge Graph"])
+            with vis_tab1:
+                st.caption("Your personalized competency polygon vs 70% CBSE mastery threshold:")
+                radar_svg = generate_mastery_radar_chart_svg(s.mastery, width=480, height=360)
+                st.components.v1.html(radar_svg, height=380)
+            with vis_tab2:
+                st.caption("Prerequisite DAG: 🟢 Mastered (≥70%) · 🟡 Developing (40-69%) · 🔴 Gap (<40%)")
+                dot_str = render_concept_graph(s.mastery)
+                st.graphviz_chart(dot_str, use_container_width=True)
+
+        # 2. Interactive Virtual Circuit Laboratory (Bust Misconceptions Live!)
+        with st.expander("⚡ Interactive Virtual Circuit Laboratory (Bust Misconceptions Live!)"):
+            st.markdown("Experiment with real circuit parameters to observe how Current, Voltage, and Resistance interact in real-time.")
+            lab_c1, lab_c2 = st.columns([1, 1])
+            with lab_c1:
+                circuit_mode = st.radio(
+                    "Circuit Configuration:",
+                    options=["Series", "Parallel"],
+                    horizontal=True,
+                    key="lab_circuit_mode"
+                )
+                v_source = st.slider("Battery Voltage (V):", min_value=1.0, max_value=24.0, value=12.0, step=1.0, key="lab_v")
+                r1_val = st.slider("Resistor R1 (Ω):", min_value=1.0, max_value=50.0, value=6.0, step=1.0, key="lab_r1")
+                r2_val = st.slider("Resistor R2 (Ω):", min_value=1.0, max_value=50.0, value=12.0, step=1.0, key="lab_r2")
+
+            sim_res = simulate_circuit(circuit_mode, v_source, r1_val, r2_val)
+
+            with lab_c2:
+                st.markdown(f"**Laboratory Readings ({sim_res['mode']} Circuit)**")
+                sim_m1, sim_m2 = st.columns(2)
+                with sim_m1:
+                    st.metric("Equivalent Resistance (Req)", f"{sim_res['r_eq']} Ω")
+                    st.metric("Branch 1: Current / Volt", f"{sim_res['i1']} A / {sim_res['v1']} V")
+                with sim_m2:
+                    st.metric("Total Circuit Current (Itot)", f"{sim_res['i_total']} A")
+                    st.metric("Branch 2: Current / Volt", f"{sim_res['i2']} A / {sim_res['v2']} V")
+                st.metric("Total Circuit Power", f"{sim_res['p_total']} W", help="P = V × I")
+
+            st.info(f"**Physical Analysis:** {sim_res['explanation']}")
+            st.warning(f"{sim_res['misconception_note']}")
+
+        # 3. NCERT Topic Revision & Formula Cheat-Sheet
+        with st.expander("📖 NCERT Topic Revision & Formula Cheat-Sheet"):
+            topic_keys = list(CONCEPTS.keys())
+            current_topic_idx = topic_keys.index(cid) if cid in topic_keys else 0
+            sel_topic = st.selectbox(
+                "Select Topic for Quick Study Guide:",
+                options=topic_keys,
+                index=current_topic_idx,
+                format_func=lambda x: CONCEPTS[x]["name"],
+                key="revision_topic_sel"
+            )
+            card = CONCEPT_STUDY_CARDS.get(sel_topic, {})
+            if card:
+                st.markdown(f"#### 📘 {card['title']}")
+                st.write(card['summary'])
+                st.markdown("**Key Formulas & Relationships:**")
+                for f_item in card.get("formulas", []):
+                    st.code(f_item, language="text")
+                st.markdown(f"""
+                <div style="background:#FEF3C7; border-left:4px solid #F59E0B; padding:10px 14px; border-radius:6px; margin-top:8px;">
+                  <b>⚠️ Common CBSE Board Exam Pitfall:</b><br>
+                  {card['common_trap']}
+                </div>
+                """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # TAB 2: TEACHER DASHBOARD (PIN-PROTECTED)
@@ -1052,23 +1176,30 @@ with tab_teacher:
 
             # 2. Concept Mastery Breakdown & At-Risk Distribution
             st.subheader("📈 Syllabus-Wide Mastery Breakdown")
-            c_chart1, c_chart2 = st.columns([3, 2])
+            tab_bar, tab_radar = st.tabs(["📊 Concept Bar Chart & At-Risk Counts", "🎯 Cohort Cognitive Radar"])
             
-            with c_chart1:
-                st.markdown("**Average Mastery by Concept Topic (%)**")
-                avg_series = (avg_mastery * 100).round(1)
-                avg_series.index = [CONCEPTS[cid]["name"] for cid in avg_series.index]
-                st.bar_chart(avg_series, color="#F4A300", height=280)
+            with tab_bar:
+                c_chart1, c_chart2 = st.columns([3, 2])
+                with c_chart1:
+                    st.markdown("**Average Mastery by Concept Topic (%)**")
+                    avg_series = (avg_mastery * 100).round(1)
+                    avg_series.index = [CONCEPTS[cid]["name"] for cid in avg_series.index]
+                    st.bar_chart(avg_series, color="#F4A300", height=280)
 
-            with c_chart2:
-                st.markdown("**Students Below 50% Threshold by Concept**")
-                below_50 = (df_students[concept_ids] < 0.50).sum()
-                below_df = pd.DataFrame({
-                    "Concept": [CONCEPTS[cid]["name"] for cid in concept_ids],
-                    "At-Risk Students": below_50.values,
-                    "% of Class": [f"{int((v / total_students) * 100)}%" for v in below_50.values],
-                }).sort_values("At-Risk Students", ascending=False)
-                st.dataframe(below_df, use_container_width=True, hide_index=True)
+                with c_chart2:
+                    st.markdown("**Students Below 50% Threshold by Concept**")
+                    below_50 = (df_students[concept_ids] < 0.50).sum()
+                    below_df = pd.DataFrame({
+                        "Concept": [CONCEPTS[cid]["name"] for cid in concept_ids],
+                        "At-Risk Students": below_50.values,
+                        "% of Class": [f"{int((v / total_students) * 100)}%" for v in below_50.values],
+                    }).sort_values("At-Risk Students", ascending=False)
+                    st.dataframe(below_df, use_container_width=True, hide_index=True)
+
+            with tab_radar:
+                st.caption("Class-wide average competency vector compared against 70% proficiency target:")
+                cohort_radar_svg = generate_mastery_radar_chart_svg(avg_mastery.to_dict(), width=500, height=380)
+                st.components.v1.html(cohort_radar_svg, height=400)
 
             st.markdown("---")
 
@@ -1109,6 +1240,34 @@ with tab_teacher:
                             "Primary Hurdle": CONCEPTS[weakest_topic]["name"],
                         })
                     st.dataframe(pd.DataFrame(risk_summary), use_container_width=True, hide_index=True)
+
+            # Individual Student Deep-Dive Profile
+            with st.expander("👤 Individual Student Profile & Cognitive Deep-Dive"):
+                student_names = df_students["Student"].tolist()
+                selected_student_name = st.selectbox("Select Student to Inspect:", options=student_names, key="sel_student_drilldown")
+                sel_row = df_students[df_students["Student"] == selected_student_name].iloc[0]
+                
+                st_col1, st_col2 = st.columns([1, 1])
+                with st_col1:
+                    st.markdown(f"**Cognitive Radar: {selected_student_name}**")
+                    student_mastery_dict = {cid: float(sel_row[cid]) for cid in concept_ids}
+                    s_radar_svg = generate_mastery_radar_chart_svg(student_mastery_dict, width=440, height=340)
+                    st.components.v1.html(s_radar_svg, height=360)
+                with st_col2:
+                    st.markdown("##### 📌 Diagnostic Profile")
+                    s_avg = sel_row[concept_ids].mean()
+                    s_tier = "🟢 Proficient" if s_avg >= 0.70 else "🟡 Developing" if s_avg >= 0.50 else "🔴 Critical Support Needed"
+                    st.write(f"**Cognitive Status:** {s_tier} ({int(s_avg * 100)}% overall mastery)")
+                    st.write(f"**Enrolled Class:** {sel_row['Class']}")
+                    
+                    s_weak = min(concept_ids, key=lambda c: sel_row[c])
+                    s_strong = max(concept_ids, key=lambda c: sel_row[c])
+                    st.write(f"**Primary Hurdle:** {CONCEPTS[s_weak]['name']} ({int(sel_row[s_weak]*100)}%)")
+                    st.write(f"**Greatest Strength:** {CONCEPTS[s_strong]['name']} ({int(sel_row[s_strong]*100)}%)")
+                    
+                    st.markdown("---")
+                    st.markdown(f"**Targeted Remedial Advice:**")
+                    st.info(f"Prioritize remediation on **{CONCEPTS[s_weak]['name']}** before advancing. Review foundational prerequisites if prerequisite mastery is below 50%.")
 
             st.markdown("---")
 
