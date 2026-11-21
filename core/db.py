@@ -114,6 +114,7 @@ def init_db() -> None:
                 alternatives_json TEXT DEFAULT '[]',
                 needs_probe INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'suspected',
+                source TEXT DEFAULT 'ai',
                 ts REAL NOT NULL,
                 FOREIGN KEY (student_id) REFERENCES students(id),
                 FOREIGN KEY (response_id) REFERENCES responses(id)
@@ -228,6 +229,27 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_misc_student ON misconception_events(student_id);
             CREATE INDEX IF NOT EXISTS idx_adj_event ON teacher_adjudications(event_id);
             """);
+
+            # Ensure columns exist on pre-existing databases (migration resilience)
+            for table, col, col_type in [
+                ("misconception_events", "source", "TEXT DEFAULT 'ai'"),
+                ("misconception_events", "evidence_span", "TEXT"),
+                ("misconception_events", "alternatives_json", "TEXT DEFAULT '[]'"),
+                ("misconception_events", "needs_probe", "INTEGER DEFAULT 0"),
+                ("misconception_events", "status", "TEXT DEFAULT 'suspected'"),
+                ("responses", "idempotency_key", "TEXT"),
+                ("responses", "client_elapsed_ms", "INTEGER DEFAULT 0"),
+                ("responses", "is_assisted", "INTEGER DEFAULT 0"),
+                ("responses", "confidence", "TEXT DEFAULT 'medium'"),
+            ]:
+                try:
+                    cur.execute(f"PRAGMA table_info({table})")
+                    existing_cols = {r["name"] for r in cur.fetchall()}
+                    if col not in existing_cols:
+                        cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
+
             conn.commit()
         finally:
             conn.close()
@@ -418,17 +440,27 @@ def log_misconception_event(
         conn = get_connection()
         try:
             cur = conn.cursor()
-            cur.execute("""
-            INSERT INTO misconception_events (
-                student_id, response_id, concept, misconception_id,
-                confidence, evidence_span, alternatives_json,
-                needs_probe, status, source, ts
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                student_id, response_id, concept, misconception_id,
-                confidence, evidence_span or "", json.dumps(alternatives or []),
-                1 if needs_probe else 0, status, source, time.time()
-            ))
+            cur.execute("PRAGMA table_info(misconception_events)")
+            cols = {r["name"] for r in cur.fetchall()}
+
+            insert_cols = ["student_id", "response_id", "concept", "misconception_id", "confidence", "ts"]
+            insert_vals = [student_id, response_id, concept, misconception_id, confidence, time.time()]
+
+            for c, val in [
+                ("evidence_span", evidence_span or ""),
+                ("evidence", evidence_span or ""),
+                ("alternatives_json", json.dumps(alternatives or [])),
+                ("needs_probe", 1 if needs_probe else 0),
+                ("status", status),
+                ("source", source),
+            ]:
+                if c in cols:
+                    insert_cols.append(c)
+                    insert_vals.append(val)
+
+            placeholders = ", ".join(["?"] * len(insert_cols))
+            col_names = ", ".join(insert_cols)
+            cur.execute(f"INSERT INTO misconception_events ({col_names}) VALUES ({placeholders})", tuple(insert_vals))
             conn.commit()
             return int(cur.lastrowid)
         finally:
