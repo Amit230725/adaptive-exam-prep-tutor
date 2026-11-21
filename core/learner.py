@@ -112,6 +112,8 @@ def get_mastery_state(mastery_val: float, evidence_count: int = 0) -> Dict[str, 
         "evidence_label": "Sparse evidence" if is_sparse else f"{evidence_count} attempts",
     }
 
+get_mastery_level_description = get_mastery_state
+
 def compute_effective_mastery(mastery: Dict[str, float]) -> Dict[str, float]:
     """
     Prerequisite propagation:

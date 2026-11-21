@@ -40,7 +40,7 @@ from core.learner import (
     select_next_question,
     target_difficulty_for_mastery,
     compute_adaptive_priority,
-    get_mastery_level_description,
+    get_mastery_state,
     DEFAULT_PRIOR,
 )
 from core.calibration import (
