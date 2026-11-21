@@ -102,6 +102,7 @@ def target_difficulty_for_mastery(mastery_val: float) -> int:
 def select_next_practice_concept(
     mastery: Dict[str, float],
     due_concepts: List[str],
+    allowed_concepts: Optional[List[str]] = None,
 ) -> Tuple[str, str]:
     """
     Selects the next concept to practice according to priority hierarchy:
@@ -114,30 +115,37 @@ def select_next_practice_concept(
       (chosen_concept_id, selection_reason_string)
     """
     eff = compute_effective_mastery(mastery)
+    pool = [c for c in allowed_concepts if c in CONCEPTS] if allowed_concepts else list(CONCEPTS.keys())
+    if not pool:
+        pool = list(CONCEPTS.keys())
+
+    # Filter due concepts to allowed pool
+    active_due = [c for c in due_concepts if c in pool]
 
     # 1. Spaced review due first
-    if due_concepts:
+    if active_due:
         # If multiple are due, pick the one with lowest effective mastery
-        c0 = min(due_concepts, key=lambda c: eff.get(c, 0.3))
+        c0 = min(active_due, key=lambda c: eff.get(c, 0.3))
         reason = f"Concept '{CONCEPTS[c0]['name']}' is due for spaced-repetition review (retrievability dropped below 90%)."
     else:
         # 2. Pick lowest effective mastery
-        c0 = min(list(CONCEPTS.keys()), key=lambda c: eff.get(c, 0.3))
+        c0 = min(pool, key=lambda c: eff.get(c, 0.3))
         reason = f"Identified as your lowest mastery area ({int(mastery.get(c0, 0.3) * 100)}%)."
 
     # 3. Prerequisite override check
     chosen = c0
     prereqs = CONCEPTS[c0].get("prerequisites", [])
     for p in prereqs:
-        p_mastery = mastery.get(p, 0.3)
-        c0_mastery = mastery.get(c0, 0.3)
-        if p_mastery < (c0_mastery - 0.10):
-            chosen = p
-            reason = (
-                f"Prerequisite '{CONCEPTS[p]['name']}' ({int(p_mastery * 100)}%) is significantly weaker "
-                f"than '{CONCEPTS[c0]['name']}' ({int(c0_mastery * 100)}%). Reinforcing foundation first."
-            )
-            break
+        if p in pool:
+            p_mastery = mastery.get(p, 0.3)
+            c0_mastery = mastery.get(c0, 0.3)
+            if p_mastery < (c0_mastery - 0.10):
+                chosen = p
+                reason = (
+                    f"Prerequisite '{CONCEPTS[p]['name']}' ({int(p_mastery * 100)}%) is significantly weaker "
+                    f"than '{CONCEPTS[c0]['name']}' ({int(c0_mastery * 100)}%). Reinforcing foundation first."
+                )
+                break
 
     return chosen, reason
 

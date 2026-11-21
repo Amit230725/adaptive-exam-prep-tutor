@@ -34,8 +34,9 @@ from core.scheduler import (
 # 1. QUESTION BANK INTEGRITY TESTS
 # -----------------------------------------------------------------------------
 def test_bank_size_and_concepts():
-    """Verify bank contains exactly 24 items, 3 per concept across all 8 concepts."""
-    assert len(QUESTION_BANK) == 24
+    """Verify bank contains 60 items, exactly 3 per concept across all 20 Class 10 Physics concepts."""
+    assert len(QUESTION_BANK) == len(CONCEPTS) * 3
+    assert len(QUESTION_BANK) == 60
     for cid in CONCEPTS:
         concept_qs = [q for q in QUESTION_BANK if q["concept"] == cid]
         assert len(concept_qs) == 3, f"Concept {cid} must have exactly 3 questions"

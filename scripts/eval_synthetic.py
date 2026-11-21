@@ -25,8 +25,8 @@ SYNTHETIC_COHORT = [
         "student": "Synthetic_M1_Tester",
         "planted_misconception": "M1",
         "concept": "current",
-        "question_id": "q_cur_01",
-        "chosen_index": 1,  # Distractor tagged M1: "0.75 A, because the bulb uses up half the current"
+        "question_id": "q_cur_02",
+        "chosen_index": 1,  # Distractor tagged M1: A1 > A2 because bulb consumes current
         "scripted_reasoning": "The bulb consumes half the current to produce light energy, so less current comes out.",
     },
     {
@@ -34,7 +34,7 @@ SYNTHETIC_COHORT = [
         "planted_misconception": "M2",
         "concept": "ohm",
         "question_id": "q_ohm_02",
-        "chosen_index": 1,  # Distractor tagged M2: "2.5 A (battery maintains constant current)"
+        "chosen_index": 1,  # Distractor tagged M2: horizontal line because battery current is constant
         "scripted_reasoning": "The battery always pumps out a constant current of 2.5 A regardless of voltage changes.",
     },
     {
@@ -48,9 +48,9 @@ SYNTHETIC_COHORT = [
     {
         "student": "Synthetic_M4_Tester",
         "planted_misconception": "M4",
-        "concept": "pd",
-        "question_id": "q_pd_01",
-        "chosen_index": 2,  # Distractor tagged M4: "To manufacture new electrons that get burned up"
+        "concept": "charge",
+        "question_id": "q_chg_03",
+        "chosen_index": 1,  # Distractor tagged M4: battery ejects high-speed electrons
         "scripted_reasoning": "The battery creates new electrons and stores electric charge that gradually runs out.",
     },
     {
@@ -58,15 +58,15 @@ SYNTHETIC_COHORT = [
         "planted_misconception": "M5",
         "concept": "parallel",
         "question_id": "q_par_01",
-        "chosen_index": 1,  # Distractor tagged M5: "18 Ω; parallel connections add up total resistance"
+        "chosen_index": 1,  # Distractor tagged M5: 12 Ω (parallel increases resistance)
         "scripted_reasoning": "Adding resistors in parallel increases resistance because adding components adds opposition: 6 + 12 = 18.",
     },
     {
         "student": "Synthetic_M6_Tester",
         "planted_misconception": "M6",
-        "concept": "resistance",
-        "question_id": "q_res_03",
-        "chosen_index": 1,  # Distractor tagged M6: "8 Ω (doubling voltage doubles resistance)"
+        "concept": "ohm",
+        "question_id": "q_ohm_03",
+        "chosen_index": 1,  # Distractor tagged M6: 10 Ω (doubling voltage doubles resistance)
         "scripted_reasoning": "Because Ohm's law says R = V/I, increasing applied voltage directly causes resistance to increase.",
     },
     {
@@ -74,7 +74,7 @@ SYNTHETIC_COHORT = [
         "planted_misconception": "M7",
         "concept": "parallel",
         "question_id": "q_par_02",
-        "chosen_index": 1,  # Distractor tagged M7: "current splits equally between branches"
+        "chosen_index": 1,  # Distractor tagged M7: current splits equally 2 A each
         "scripted_reasoning": "In parallel circuits current always splits equally 50/50 between branches no matter the resistance.",
     },
 ]

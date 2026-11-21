@@ -36,7 +36,8 @@ def test_simulated_class_reproducibility_and_labels():
 def test_simulated_misconceptions():
     """Verify simulated misconception stats match research library."""
     stats = get_simulated_misconception_stats()
-    assert len(stats) == 7
+    assert len(stats) == len(MISCONCEPTIONS)
+    assert len(stats) == 17
     for row in stats:
         assert row["Misconception_ID"] in MISCONCEPTIONS
         assert row["Affected_Students"] > 0
@@ -58,9 +59,9 @@ def test_db_student_mastery_aggregation():
     assert pupil["Is_Simulated"] is False
 
 def test_calibrated_items_retrieval():
-    """Verify all 24 questions are represented in calibration report."""
+    """Verify all 60 questions are represented in calibration report."""
     items = get_all_calibrated_items()
-    assert len(items) == 24
+    assert len(items) == 60
     for it in items:
         assert "Question_ID" in it
         assert "Labelled_b0" in it

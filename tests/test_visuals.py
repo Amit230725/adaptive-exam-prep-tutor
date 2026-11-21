@@ -20,8 +20,8 @@ def test_radar_chart_svg_generation():
     assert "<svg" in svg
     assert "</svg>" in svg
     assert "<polygon" in svg
-    for cid in CONCEPTS:
-        c_short = CONCEPTS[cid]["name"].replace(" Circuits", "").replace(" & Factors", "")
+    for cid in sample_mastery:
+        c_short = CONCEPTS[cid]["name"].split("&")[0].split("(")[0].replace(" Circuits", "").replace("Spherical ", "").strip()
         assert c_short in svg
 
 def test_circuit_simulation_series():

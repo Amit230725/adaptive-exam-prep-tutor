@@ -10,7 +10,13 @@ import uuid
 import streamlit as st
 import pandas as pd
 
-from core.concepts import CONCEPTS, MISCONCEPTIONS, get_ordered_concepts
+from core.concepts import (
+    CONCEPTS,
+    MISCONCEPTIONS,
+    CHAPTERS,
+    get_ordered_concepts,
+    get_chapter_for_concept,
+)
 from core.bank import (
     QUESTION_BANK,
     get_diagnostic_questions,
@@ -275,9 +281,10 @@ if "student_id" not in s:
     s.nickname = ""
     s.class_code = "CLASS-10A"
     s.phase = "welcome"  # "welcome", "diag", "diag_summary", "adapt"
+    s.active_chapter = "all"  # "all", "light", "human_eye", "electricity", "magnetism"
     s.api_key_override = ""
     
-    # Concept mastery values [0.0 to 1.0]
+    # Concept mastery values [0.0 to 1.0] across all 20 syllabus topics
     s.mastery = {cid: DEFAULT_PRIOR for cid in CONCEPTS}
     
     # Spaced Repetition (FSRS) state per concept
@@ -305,11 +312,14 @@ if "student_id" not in s:
     s.teacher_auth = False
     s.reteach_plan = None
 
+if "active_chapter" not in s:
+    s.active_chapter = "all"
+
 # -----------------------------------------------------------------------------
 # HELPER FUNCTIONS: GRAPH & DIAGNOSIS
 # -----------------------------------------------------------------------------
-def render_concept_graph(mastery_dict):
-    """Generates Graphviz DOT string with node colors based on mastery."""
+def render_concept_graph(mastery_dict, chapter_filter=None):
+    """Generates Graphviz DOT string with node colors based on mastery, optionally filtered by chapter."""
     dot = [
         'digraph ConceptGraph {',
         '  rankdir=LR;',
@@ -317,7 +327,13 @@ def render_concept_graph(mastery_dict):
         '  node [fontname="Helvetica", shape="box", style="filled,rounded", fontcolor="#FFFFFF", fontsize=11, height=0.6];',
         '  edge [color="#6B7280", penwidth=1.5, arrowsize=0.8];',
     ]
-    for cid, data in CONCEPTS.items():
+    if chapter_filter and chapter_filter in CHAPTERS:
+        target_cids = set(CHAPTERS[chapter_filter]["concepts"])
+    else:
+        target_cids = set(CONCEPTS.keys())
+
+    for cid in target_cids:
+        data = CONCEPTS[cid]
         m = mastery_dict.get(cid, DEFAULT_PRIOR)
         if m >= 0.70:
             fill_color = "#1B998B"
@@ -329,10 +345,11 @@ def render_concept_graph(mastery_dict):
             fill_color = "#D1495B"
             badge = "Needs Review"
         
-        name = data["name"].replace('"', '\\"')
-        dot.append(f'  "{cid}" [label="{name}\\n{int(m * 100)}% ({badge})", fillcolor="{fill_color}"];')
+        c_title = data["name"].split("&")[0].split("(")[0].replace('"', '\\"').strip()
+        dot.append(f'  "{cid}" [label="{c_title}\\n{int(m * 100)}% ({badge})", fillcolor="{fill_color}"];')
         for prereq in data.get("prerequisites", []):
-            dot.append(f'  "{prereq}" -> "{cid}";')
+            if prereq in target_cids:
+                dot.append(f'  "{prereq}" -> "{cid}";')
             
     dot.append('}')
     return "\n".join(dot)
@@ -342,12 +359,37 @@ def render_concept_graph(mastery_dict):
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## ⚡ ConceptPilot")
-    st.caption("Class 10 Physics · NCERT Electricity")
+    st.caption("CBSE Class 10 Physics · Full Syllabus (4 Chapters)")
     
     # Language Selection (Hindi / English UI toggle)
     lang_val = st.radio("Language / भाषा:", ["English", "हिन्दी"], horizontal=True, index=0 if s.get("lang", "en") == "en" else 1)
     s.lang = "en" if lang_val == "English" else "hi"
     T = I18N[s.lang]
+    st.markdown("---")
+
+    # Syllabus / Chapter Scope Selector
+    st.subheader("📚 Syllabus Scope")
+    scope_options = ["all"] + list(CHAPTERS.keys())
+    scope_labels = {
+        "all": "🌐 Full Physics (All 4 Chapters)",
+        "light": "💡 Ch 9: Light (Mirrors & Lenses)",
+        "human_eye": "👁️ Ch 10: Human Eye & World",
+        "electricity": "⚡ Ch 11: Electricity",
+        "magnetism": "🧲 Ch 12: Magnetic Effects",
+    }
+    cur_scope = s.get("active_chapter", "all")
+    sel_scope = st.selectbox(
+        "Active Chapter Focus:",
+        options=scope_options,
+        index=scope_options.index(cur_scope) if cur_scope in scope_options else 0,
+        format_func=lambda x: scope_labels.get(x, x),
+        key="sb_chapter_sel"
+    )
+    if sel_scope != s.get("active_chapter", "all"):
+        s.active_chapter = sel_scope
+        s.current_q = None
+        st.rerun()
+
     st.markdown("---")
 
     # AI Connection Status
@@ -373,25 +415,34 @@ with st.sidebar:
             st.markdown(f"🔥 **{T['streak_label']}** `{current_streak}` in a row!")
         st.markdown("---")
 
-    # Concept Mastery Overview
+    # Concept Mastery Overview (Filtered by active chapter or grouped)
     st.subheader(T["mastery_title"])
-    for cid in get_ordered_concepts():
-        c_name = CONCEPTS[cid]["name"]
-        m_val = s.mastery.get(cid, DEFAULT_PRIOR)
-        s_data = s.schedule.get(cid, {})
-        stab = s_data.get("stability", 1.0)
-        last_d = s_data.get("last_review_day", 0.0)
-        due = is_due_for_review(stab, last_d, s.current_day)
+    if s.active_chapter == "all":
+        for ch_key, ch_data in CHAPTERS.items():
+            with st.expander(f"{ch_data['icon']} {ch_data['short_name']}"):
+                for cid in ch_data["concepts"]:
+                    c_name = CONCEPTS[cid]["name"].split("&")[0].split("(")[0].strip()
+                    m_val = s.mastery.get(cid, DEFAULT_PRIOR)
+                    st.progress(float(m_val), text=f"{c_name}: {int(m_val * 100)}%")
+    else:
+        active_cids = CHAPTERS[s.active_chapter]["concepts"]
+        for cid in active_cids:
+            c_name = CONCEPTS[cid]["name"].split("&")[0].split("(")[0].strip()
+            m_val = s.mastery.get(cid, DEFAULT_PRIOR)
+            s_data = s.schedule.get(cid, {})
+            stab = s_data.get("stability", 1.0)
+            last_d = s_data.get("last_review_day", 0.0)
+            due = is_due_for_review(stab, last_d, s.current_day)
 
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.progress(float(m_val), text=f"{c_name}: {int(m_val * 100)}%")
-        with col2:
-            if due:
-                st.markdown("<span style='color:#DC2626;font-size:0.75rem;font-weight:bold;'>DUE NOW</span>", unsafe_allow_html=True)
-            else:
-                rem = max(0.0, round(stab - (s.current_day - last_d), 1))
-                st.caption(f"Due in {rem}d")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(float(m_val), text=f"{c_name}: {int(m_val * 100)}%")
+            with col2:
+                if due:
+                    st.markdown("<span style='color:#DC2626;font-size:0.75rem;font-weight:bold;'>DUE</span>", unsafe_allow_html=True)
+                else:
+                    rem = max(0.0, round(stab - (s.current_day - last_d), 1))
+                    st.caption(f"{rem}d")
 
     st.markdown("---")
     
@@ -435,13 +486,14 @@ with tab_student:
         
         st.markdown("""
         <div class="cp-card">
-          <p>Welcome! ConceptPilot is an adaptive exam-prep tutor for <b>CBSE Class 10 Science (Electricity)</b>. 
-          Unlike standard quiz apps that only check whether your option matches the key, ConceptPilot uses 
-          pedagogical AI to analyze your underlying reasoning for published physics misconceptions.</p>
+          <p>Welcome! ConceptPilot is an adaptive cognitive tutor for the complete <b>CBSE Class 10 Science Physics Syllabus</b> 
+          (Light, The Human Eye, Electricity, and Magnetic Effects). Unlike standard quiz apps that only check whether your 
+          option matches the key, ConceptPilot uses pedagogical AI to analyze your underlying reasoning for 
+          <b>published physics education research (PER) misconceptions</b>.</p>
           <ul style="margin-bottom:0;">
-            <li><b>8-Topic Diagnostic:</b> Standardized baseline diagnostic covering all syllabus concepts.</li>
-            <li><b>Adaptive Practice:</b> Prioritizes weakest topics, prerequiste gaps, and due spaced reviews.</li>
-            <li><b>Dual-Pass AI Generation:</b> New questions generated to expose active misconceptions, self-verified by an independent AI solver pass before presenting.</li>
+            <li><b>Complete 4-Chapter Syllabus:</b> Diagnostic & practice covering Light, Human Eye, Electricity & Magnetism.</li>
+            <li><b>Dynamic Bayesian Learner Model:</b> Updates mastery after every answer with cognitive gain calibration.</li>
+            <li><b>Dual-Pass AI Generation:</b> Generates targeted questions to bust active misconceptions, verified by independent solver pass before presentation.</li>
           </ul>
         </div>
         """, unsafe_allow_html=True)
@@ -451,6 +503,21 @@ with tab_student:
             nickname_in = st.text_input("Choose a Nickname (No real names needed)", value="Aarav", placeholder="e.g. CircuitMaster")
             class_code_in = st.text_input("Class Code (optional)", value="CLASS-10A")
             
+            scope_choices = ["all", "light", "human_eye", "electricity", "magnetism"]
+            scope_labels_map = {
+                "all": "🌐 Full Class 10 Physics Syllabus (All 4 Chapters)",
+                "light": "💡 Chapter 9: Light – Reflection & Refraction",
+                "human_eye": "👁️ Chapter 10: The Human Eye & Colourful World",
+                "electricity": "⚡ Chapter 11: Electricity",
+                "magnetism": "🧲 Chapter 12: Magnetic Effects of Electric Current",
+            }
+            chosen_scope = st.selectbox(
+                "Select Starting Syllabus Scope:",
+                options=scope_choices,
+                format_func=lambda x: scope_labels_map[x],
+                index=0,
+            )
+            
             st.caption("🔒 **Privacy Guarantee:** No login or personal contact data is collected. Only your chosen nickname and responses are stored.")
             submit_welcome = st.form_submit_button("Start Diagnostic Test 🚀", type="primary")
             
@@ -458,41 +525,68 @@ with tab_student:
                 if nickname_in.strip():
                     s.nickname = nickname_in.strip()
                     s.class_code = class_code_in.strip() or "DEFAULT"
+                    s.active_chapter = chosen_scope
                     save_student(s.student_id, s.nickname, s.class_code)
+                    s.diag_questions = get_diagnostic_questions(chosen_scope if chosen_scope != "all" else None)
                     s.phase = "diag"
                     s.diag_idx = 0
                     st.rerun()
                 else:
                     st.warning("Please choose a nickname to continue.")
 
-        # Hackathon Judge / Rapid Evaluation Presets (Instant Testing)
+        # Hackathon Judge / Rapid Evaluation Presets (Instant Testing across chapters)
         with st.expander("⚡ Hackathon Judges & Fast Evaluation Presets (Click to Auto-Load)"):
-            st.caption("Instantly test specific learner states without manually answering all 8 diagnostic questions:")
+            st.caption("Instantly test specific learner states across all 4 chapters without answering all diagnostic questions:")
             p_col1, p_col2 = st.columns(2)
             with p_col1:
-                if st.button("Preset: Parallel Circuit Gap (Holds M5)", use_container_width=True):
+                if st.button("Preset 1: Parallel Gap (M5 - Electricity)", use_container_width=True):
                     s.nickname = "Judge (Parallel Gap)"
                     s.class_code = "CLASS-10A"
+                    s.active_chapter = "electricity"
                     save_student(s.student_id, s.nickname, s.class_code)
-                    s.mastery = {
-                        "charge": 0.85, "current": 0.70, "pd": 0.65, "ohm": 0.70,
-                        "resistance": 0.60, "series": 0.65, "parallel": 0.30, "power": 0.60
-                    }
+                    s.mastery["parallel"] = 0.30
+                    s.mastery["series"] = 0.65
                     s.active_misconceptions["parallel"] = "M5"
                     for c in CONCEPTS:
                         save_mastery_state(s.student_id, c, s.mastery[c], 1.5, 1.5, 1)
                     s.phase = "adapt"
                     st.rerun()
-            with p_col2:
-                if st.button("Preset: Series Circuit Gap (Holds M1)", use_container_width=True):
-                    s.nickname = "Judge (Series Gap)"
+
+                if st.button("Preset 2: Lens Halving Image Gap (M9 - Light)", use_container_width=True):
+                    s.nickname = "Judge (Lens Half Gap)"
                     s.class_code = "CLASS-10A"
+                    s.active_chapter = "light"
                     save_student(s.student_id, s.nickname, s.class_code)
-                    s.mastery = {
-                        "charge": 0.80, "current": 0.40, "pd": 0.60, "ohm": 0.55,
-                        "resistance": 0.50, "series": 0.35, "parallel": 0.60, "power": 0.50
-                    }
-                    s.active_misconceptions["series"] = "M1"
+                    s.mastery["refraction_lenses"] = 0.32
+                    s.mastery["lens_power"] = 0.55
+                    s.active_misconceptions["refraction_lenses"] = "M9"
+                    for c in CONCEPTS:
+                        save_mastery_state(s.student_id, c, s.mastery[c], 1.5, 1.5, 1)
+                    s.phase = "adapt"
+                    st.rerun()
+
+            with p_col2:
+                if st.button("Preset 3: Myopia / Vision Gap (M12 - Human Eye)", use_container_width=True):
+                    s.nickname = "Judge (Myopia Gap)"
+                    s.class_code = "CLASS-10A"
+                    s.active_chapter = "human_eye"
+                    save_student(s.student_id, s.nickname, s.class_code)
+                    s.mastery["defects_vision"] = 0.35
+                    s.mastery["eye_vision"] = 0.60
+                    s.active_misconceptions["defects_vision"] = "M12"
+                    for c in CONCEPTS:
+                        save_mastery_state(s.student_id, c, s.mastery[c], 1.5, 1.5, 1)
+                    s.phase = "adapt"
+                    st.rerun()
+
+                if st.button("Preset 4: Magnetic Monopole Gap (M15 - Magnetism)", use_container_width=True):
+                    s.nickname = "Judge (Magnetic Gap)"
+                    s.class_code = "CLASS-10A"
+                    s.active_chapter = "magnetism"
+                    save_student(s.student_id, s.nickname, s.class_code)
+                    s.mastery["magnetic_field"] = 0.35
+                    s.mastery["magnetic_force"] = 0.40
+                    s.active_misconceptions["magnetic_field"] = "M15"
                     for c in CONCEPTS:
                         save_mastery_state(s.student_id, c, s.mastery[c], 1.5, 1.5, 1)
                     s.phase = "adapt"
@@ -627,26 +721,29 @@ with tab_student:
     elif s.phase == "diag_summary":
         st.balloons()
         st.title("🎯 Diagnostic Complete: Your Starting Knowledge Map")
-        st.markdown(f"Great work, **{s.nickname}**! We diagnosed your answers and physical reasoning across all 8 syllabus topics.")
+        ch_label = CHAPTERS[s.active_chapter]["name"] if s.get("active_chapter", "all") != "all" else "the Complete CBSE Class 10 Physics Syllabus"
+        st.markdown(f"Great work, **{s.nickname}**! We diagnosed your answers and physical reasoning across {ch_label}.")
         
         col_g1, col_g2 = st.columns([1, 1])
         with col_g1:
             st.markdown("### 🕸️ Visual Prerequisite Graph")
             st.caption("Prerequisite DAG: 🟢 Mastered (≥70%) · 🟡 Developing (40-69%) · 🔴 Gap (<40%)")
-            dot_str = render_concept_graph(s.mastery)
+            dot_str = render_concept_graph(s.mastery, s.get("active_chapter", "all"))
             st.graphviz_chart(dot_str, use_container_width=True)
             
         with col_g2:
             st.markdown("### 🎯 Cognitive Mastery Radar")
-            st.caption("8-axis competency profile against 70% CBSE target threshold:")
-            radar_svg = generate_mastery_radar_chart_svg(s.mastery, width=480, height=360)
+            st.caption("Competency profile against 70% CBSE target threshold:")
+            c_keys = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
+            radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=c_keys, width=480, height=360)
             st.components.v1.html(radar_svg, height=380)
 
         st.markdown("---")
         st.markdown("### 🔍 Diagnostic Findings & Early Misconceptions")
         
-        # Identify weakest concepts
-        sorted_concepts = sorted(s.mastery.items(), key=lambda kv: kv[1])
+        # Identify weakest concepts among diagnosed topics
+        diag_cids = list(set([q["concept"] for q in s.diag_questions])) if s.diag_questions else list(CONCEPTS.keys())
+        sorted_concepts = sorted([(cid, s.mastery.get(cid, DEFAULT_PRIOR)) for cid in diag_cids], key=lambda kv: kv[1])
         weakest = sorted_concepts[0]
         st.warning(f"⚠️ **Priority Focus Area:** {CONCEPTS[weakest[0]]['name']} ({int(weakest[1] * 100)}% starting mastery)")
         
@@ -681,7 +778,8 @@ with tab_student:
         # 1. Select or generate next question if not currently active
         if s.current_q is None:
             due_cids = get_due_concepts(s.schedule, s.current_day)
-            target_cid, selection_reason = select_next_practice_concept(s.mastery, due_cids)
+            allowed = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
+            target_cid, selection_reason = select_next_practice_concept(s.mastery, due_cids, allowed_concepts=allowed)
             target_diff = target_difficulty_for_mastery(s.mastery.get(target_cid, DEFAULT_PRIOR))
             active_m = s.active_misconceptions.get(target_cid)
 
@@ -991,14 +1089,15 @@ with tab_student:
 
         # 1. Live Visual Mastery Suite (Graph + Radar)
         with st.expander("📊 View Live Mastery Visuals (Prerequisite Graph & Cognitive Radar)"):
-            vis_tab1, vis_tab2 = st.tabs(["🎯 8-Axis Cognitive Radar", "🕸️ Prerequisite Knowledge Graph"])
+            vis_tab1, vis_tab2 = st.tabs(["🎯 Cognitive Radar", "🕸️ Prerequisite Knowledge Graph"])
             with vis_tab1:
                 st.caption("Your personalized competency polygon vs 70% CBSE mastery threshold:")
-                radar_svg = generate_mastery_radar_chart_svg(s.mastery, width=480, height=360)
+                c_keys = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
+                radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=c_keys, width=480, height=360)
                 st.components.v1.html(radar_svg, height=380)
             with vis_tab2:
                 st.caption("Prerequisite DAG: 🟢 Mastered (≥70%) · 🟡 Developing (40-69%) · 🔴 Gap (<40%)")
-                dot_str = render_concept_graph(s.mastery)
+                dot_str = render_concept_graph(s.mastery, s.get("active_chapter", "all"))
                 st.graphviz_chart(dot_str, use_container_width=True)
 
         # 2. Interactive Virtual Circuit Laboratory (Bust Misconceptions Live!)
@@ -1034,7 +1133,7 @@ with tab_student:
 
         # 3. NCERT Topic Revision & Formula Cheat-Sheet
         with st.expander("📖 NCERT Topic Revision & Formula Cheat-Sheet"):
-            topic_keys = list(CONCEPTS.keys())
+            topic_keys = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else list(CONCEPTS.keys())
             current_topic_idx = topic_keys.index(cid) if cid in topic_keys else 0
             sel_topic = st.selectbox(
                 "Select Topic for Quick Study Guide:",
@@ -1098,7 +1197,7 @@ with tab_teacher:
         st.markdown("---")
 
         # Controls & Filters
-        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 3, 2])
+        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 3, 3])
         
         with ctrl_col1:
             db_classes = get_available_classes()
@@ -1106,10 +1205,24 @@ with tab_teacher:
             selected_class = st.selectbox("Select Class Section:", options=class_options, index=0)
 
         with ctrl_col2:
-            include_sim = st.toggle("Include simulated sample class (20 benchmark students)", value=False)
+            t_chapters = ["all"] + list(CHAPTERS.keys())
+            t_chap_labels = {
+                "all": "🌐 Full Physics (All 4 Chapters)",
+                "light": "💡 Ch 9: Light (Mirrors & Lenses)",
+                "human_eye": "👁️ Ch 10: Human Eye & World",
+                "electricity": "⚡ Ch 11: Electricity",
+                "magnetism": "🧲 Ch 12: Magnetic Effects",
+            }
+            teacher_scope = st.selectbox(
+                "Filter Chapter Scope:",
+                options=t_chapters,
+                index=0,
+                format_func=lambda x: t_chap_labels.get(x, x),
+                key="teacher_chapter_filter",
+            )
 
         with ctrl_col3:
-            st.write("")  # Alignment spacing
+            include_sim = st.toggle("Include simulated sample class (20 benchmark students)", value=False)
 
         # Simulated Data Notice (Section 11)
         if include_sim:
@@ -1150,7 +1263,7 @@ with tab_teacher:
             """, unsafe_allow_html=True)
         else:
             df_students = pd.DataFrame(combined_students)
-            concept_ids = list(CONCEPTS.keys())
+            concept_ids = CHAPTERS[teacher_scope]["concepts"] if teacher_scope != "all" else list(CONCEPTS.keys())
             
             # 1. Top-Level Metric Summary Cards
             avg_mastery = df_students[concept_ids].mean()
@@ -1198,7 +1311,8 @@ with tab_teacher:
 
             with tab_radar:
                 st.caption("Class-wide average competency vector compared against 70% proficiency target:")
-                cohort_radar_svg = generate_mastery_radar_chart_svg(avg_mastery.to_dict(), width=500, height=380)
+                c_scope_keys = concept_ids if teacher_scope != "all" else None
+                cohort_radar_svg = generate_mastery_radar_chart_svg(avg_mastery.to_dict(), concept_keys=c_scope_keys, width=500, height=380)
                 st.components.v1.html(cohort_radar_svg, height=400)
 
             st.markdown("---")
@@ -1251,7 +1365,7 @@ with tab_teacher:
                 with st_col1:
                     st.markdown(f"**Cognitive Radar: {selected_student_name}**")
                     student_mastery_dict = {cid: float(sel_row[cid]) for cid in concept_ids}
-                    s_radar_svg = generate_mastery_radar_chart_svg(student_mastery_dict, width=440, height=340)
+                    s_radar_svg = generate_mastery_radar_chart_svg(student_mastery_dict, concept_keys=c_scope_keys, width=440, height=340)
                     st.components.v1.html(s_radar_svg, height=360)
                 with st_col2:
                     st.markdown("##### 📌 Diagnostic Profile")
@@ -1384,9 +1498,9 @@ with tab_about:
     st.markdown("""
     <div class="cp-card">
       <h4>🎯 Product Mission & Problem Understanding</h4>
-      <p>ConceptPilot is designed to bridge the gap between educational cognitive research and generative AI for 
-      <b>CBSE Class 10 Science (Electricity)</b> candidates and educators. Recent educational studies and teacher 
-      interviews highlight several critical challenges in digital exam-preparation:</p>
+      <p>ConceptPilot is designed to bridge the gap between educational cognitive research and generative AI across 
+      the complete <b>CBSE Class 10 Science Physics Syllabus (Light, Human Eye, Electricity, and Magnetic Effects)</b> 
+      for candidates and educators. Recent educational studies and teacher interviews highlight several critical challenges in digital exam-preparation:</p>
       <ul>
         <li><b>Reactive vs. Diagnostic Tutors:</b> Research suggests that conversational AI chatbots tend to respond 
         reactively to student prompts—often explaining problems away or solving them outright—rather than diagnosing 
@@ -1396,22 +1510,22 @@ with tab_about:
         lead to high student abandonment. ConceptPilot addresses this tension through <b>fast feedback, one targeted 
         Socratic hint, one retry, and short cognitive loops</b>.</li>
         <li><b>Flawed Reasoning Behind Correct Answers:</b> In standardized multiple-choice assessments, a student can 
-        easily guess the correct option while holding a deeply flawed mental model (e.g. choosing the correct series 
-        brightness through the false belief that battery current is fixed). ConceptPilot requires a brief one-line 
+        easily guess the correct option while holding a deeply flawed mental model (e.g. choosing the correct lens formula answer 
+        while believing images reside on the lens glass). ConceptPilot requires a brief one-line 
         reasoning explanation for every first attempt to detect latent misconceptions.</li>
         <li><b>The Unreliability of LLM Difficulty Judgments:</b> Empirical evaluations demonstrate that Large Language 
         Models are notoriously unreliable at judging or generating questions of specific psychometric difficulty. 
         ConceptPilot separates question generation from difficulty estimation, employing an empirical <b>Rasch Item Response 
         Theory (IRT) model</b> that calibrates item difficulty from real student outcomes.</li>
         <li><b>CBSE Competency-Based Board Evolution:</b> The CBSE Class 10 examination framework has systematically 
-        shifted toward high-weightage application and competency-based questions. Superficial memorization is no longer 
+        shifted toward high-weightage application and competency-based questions across all physics units. Superficial memorization is no longer 
         sufficient; diagnosing core conceptual understanding is essential.</li>
       </ul>
     </div>
     """, unsafe_allow_html=True)
 
     # Section: The 7 Organiser Components Mapped to Architecture
-    st.subheader("🧩 The 7 Mandatory Organiser Components")
+    st.subheader("🧩 The 7 Mandatory Organiser Components Across All 4 Physics Chapters")
     st.caption("How ConceptPilot implements each hackathon requirement:")
 
     comp_col1, comp_col2 = st.columns(2)
@@ -1420,15 +1534,14 @@ with tab_about:
         st.markdown("""
         <div class="cp-card">
           <b>1. Diagnostic Baseline Assessment</b><br>
-          An 8-question standardized baseline across all core syllabus topics in pedagogical sequence. 
-          Produces an initial mastery vector and flags early suspected misconceptions before practice starts.
+          A standardized baseline diagnostic across core syllabus topics in pedagogical sequence. 
+          Supports chapter-specific diagnostics or a balanced cross-chapter diagnostic covering the entire Class 10 Physics syllabus.
         </div>
         
         <div class="cp-card">
           <b>2. Syllabus Concept Graph</b><br>
-          A directed acyclic graph (DAG) modeling prerequisite relationships across 8 syllabus concepts 
-          (Charge &rarr; Current/PD &rarr; Ohm's Law &rarr; Resistance &rarr; Series/Parallel &rarr; Power). 
-          Visualized live via Graphviz with real-time mastery-dependent node coloring.
+          A directed acyclic graph (DAG) modeling prerequisite relationships across all 20 syllabus concepts spanning 
+          Light, Human Eye, Electricity, and Magnetic Effects. Visualized live via Graphviz with real-time mastery-dependent node coloring.
         </div>
         
         <div class="cp-card">
@@ -1450,9 +1563,8 @@ with tab_about:
         st.markdown("""
         <div class="cp-card">
           <b>5. Reasoning-Based Misconception Detection</b><br>
-          Evaluates student explanations against a fixed 7-model Physics Education Research (PER) library (M1–M7). 
-          If reasoning is ambiguous, prompts a single-sentence Socratic probe (Call C). Gracefully falls back 
-          to distractor tagging when offline.
+          Evaluates student explanations against a fixed 17-model Physics Education Research (PER) library (M1–M17) 
+          spanning Optics, Vision, Circuits, and Electromagnetism. If reasoning is ambiguous, prompts a single-sentence Socratic probe (Call C).
         </div>
         
         <div class="cp-card">
@@ -1463,15 +1575,15 @@ with tab_about:
         
         <div class="cp-card">
           <b>7. Teacher Diagnostic Dashboard</b><br>
-          PIN-protected portal displaying class-wide cognitive heatmaps, concept risk distributions, misconception 
+          PIN-protected portal displaying class-wide cognitive heatmaps, chapter-filtered concept risk distributions, misconception 
           prevalence, empirical item calibration tables, one-click <b>AI Remedial Reteach Plans (Call D)</b>, 
-          and CSV export. Separates real pilot data from clearly labeled benchmark simulations.
+          and CSV export.
         </div>
         """, unsafe_allow_html=True)
 
     # Section: Physics Education Research Misconception Reference Library
-    st.subheader("📚 Research Misconception Reference Library (M1 – M7)")
-    st.caption("Derived from seminal studies by McDermott & Shaffer (1992), Shipstone (1988), and Engelhardt & Beichner (2004):")
+    st.subheader("📚 Full Syllabus Research Misconception Library (M1 – M17)")
+    st.caption("Derived from seminal studies by McDermott & Shaffer (1992), Goldberg & McDermott (1987), Galili & Hazan (2000), and Maloney et al. (2001 - CSEM):")
     
     misc_rows = []
     for mid, m_info in MISCONCEPTIONS.items():
