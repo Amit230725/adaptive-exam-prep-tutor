@@ -144,14 +144,196 @@ def generate_mastery_radar_chart_svg(
         {''.join(labels_svg)}
         <!-- Legend -->
         <g transform="translate({cx - 130}, 20)">
-            <rect x="0" y="0" width="12" height="12" fill="rgba(244, 163, 0, 0.4)" stroke="#F4A300" stroke-width="1.5" rx="2" />
+            <rect x="0" y="0" width="12" height="12" fill="rgba(37, 99, 235, 0.4)" stroke="#2563EB" stroke-width="1.5" rx="2" />
             <text x="18" y="10" class="legend-text">Your Mastery</text>
-            <line x1="110" y1="6" x2="130" y2="6" stroke="#1B998B" stroke-width="2" stroke-dasharray="3,3" />
+            <line x1="110" y1="6" x2="130" y2="6" stroke="#10B981" stroke-width="2" stroke-dasharray="3,3" />
             <text x="136" y="10" class="legend-text">70% Target Threshold</text>
         </g>
     </svg>
     """
     return svg_content
+
+def generate_circular_progress_svg(
+    percentage: float,
+    size: int = 110,
+    stroke_width: int = 10,
+    color: str = "#2563EB",
+    track_color: str = "#E2E8F0",
+) -> str:
+    """
+    Renders a modern circular progress ring matching the Reyhan Adinata Dribbble dashboard style.
+    """
+    p = max(0.0, min(1.0, float(percentage)))
+    radius = (size - stroke_width) / 2
+    circumference = 2 * math.pi * radius
+    dashoffset = circumference * (1.0 - p)
+    cx, cy = size / 2, size / 2
+    pct_str = f"{int(p * 100)}%"
+
+    return f"""
+    <svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" style="display:block;margin:auto;">
+        <circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="{track_color}" stroke-width="{stroke_width}" />
+        <circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="{color}" stroke-width="{stroke_width}"
+                stroke-dasharray="{circumference:.2f}" stroke-dashoffset="{dashoffset:.2f}"
+                stroke-linecap="round" transform="rotate(-90 {cx} {cy})" />
+        <text x="{cx}" y="{cy + 6}" font-family="Inter, sans-serif" font-size="{int(size * 0.22)}" font-weight="700"
+              fill="#0F172A" text-anchor="middle">{pct_str}</text>
+    </svg>
+    """
+
+def generate_activity_barchart_svg(
+    days_data: Optional[List[Dict[str, Any]]] = None,
+    width: int = 600,
+    height: int = 240,
+) -> str:
+    """
+    Renders the modern ed-tech weekly learning activity bar chart with active highlighted column,
+    replicating the Dribbble dashboard aesthetic.
+    """
+    if not days_data:
+        days_data = [
+            {"day": "Mon", "value": 28, "active": False},
+            {"day": "Tue", "value": 65, "active": False},
+            {"day": "Wed", "value": 30, "active": False},
+            {"day": "Thu", "value": 90, "active": True, "tooltip": "Learning time<br><b>2h 15m</b>"},
+            {"day": "Fri", "value": 45, "active": False},
+            {"day": "Sat", "value": 75, "active": False},
+            {"day": "Sun", "value": 35, "active": False},
+        ]
+
+    n_bars = len(days_data)
+    padding_x = 35
+    avail_w = width - (2 * padding_x)
+    col_w = avail_w / n_bars
+    bar_w = min(56.0, col_w * 0.62)
+    chart_h = height - 60
+
+    bars_svg = []
+    labels_svg = []
+    overlay_svg = []
+
+    for i, item in enumerate(days_data):
+        bx = padding_x + (i * col_w) + (col_w - bar_w) / 2
+        pct = max(0.08, min(1.0, item["value"] / 100.0))
+        bh = chart_h * pct
+        by = 25 + (chart_h - bh)
+
+        if item.get("active", False):
+            # Vibrant Cobalt Blue Bar with subtle pattern
+            bars_svg.append(f'''
+                <rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" rx="10"
+                      fill="#2563EB" />
+                <path d="M {bx+6} {by+14} Q {bx+bar_w/2} {by+8} {bx+bar_w-6} {by+14}" stroke="rgba(255,255,255,0.4)" stroke-width="1.8" fill="none" />
+                <path d="M {bx+6} {by+26} Q {bx+bar_w/2} {by+20} {bx+bar_w-6} {by+26}" stroke="rgba(255,255,255,0.4)" stroke-width="1.8" fill="none" />
+                <path d="M {bx+6} {by+38} Q {bx+bar_w/2} {by+32} {bx+bar_w-6} {by+38}" stroke="rgba(255,255,255,0.4)" stroke-width="1.8" fill="none" />
+            ''')
+            # Floating Tooltip Pill on top of active bar
+            tip_w, tip_h = 92, 38
+            tip_x = (bx + bar_w / 2) - (tip_w / 2)
+            tip_y = max(2, by - tip_h - 8)
+            overlay_svg.append(f'''
+                <g transform="translate({tip_x:.1f}, {tip_y:.1f})">
+                    <rect width="{tip_w}" height="{tip_h}" rx="8" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1" />
+                    <text x="{tip_w/2}" y="14" font-family="Inter, sans-serif" font-size="9" fill="#64748B" text-anchor="middle">Learning time</text>
+                    <text x="{tip_w/2}" y="28" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#2563EB" text-anchor="middle">2h 15m</text>
+                </g>
+            ''')
+        else:
+            # Clean Slate Blue Outline Bar
+            bars_svg.append(f'''
+                <rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" rx="10"
+                      fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.2" />
+            ''')
+
+        # Day Label
+        font_weight = "700" if item.get("active") else "500"
+        font_color = "#2563EB" if item.get("active") else "#64748B"
+        labels_svg.append(f'''
+            <text x="{bx + bar_w/2:.1f}" y="{height - 15}" font-family="Inter, sans-serif" font-size="12"
+                  font-weight="{font_weight}" fill="{font_color}" text-anchor="middle">{item["day"]}</text>
+        ''')
+
+    return f"""
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" style="width:100%; height:auto; display:block;">
+        <line x1="{padding_x}" y1="{height - 35}" x2="{width - padding_x}" y2="{height - 35}" stroke="#F1F5F9" stroke-width="1.5" />
+        {''.join(bars_svg)}
+        {''.join(overlay_svg)}
+        {''.join(labels_svg)}
+    </svg>
+    """
+
+def generate_evaluation_certificate_html(
+    student_name: str,
+    class_code: str,
+    readiness_score: int,
+    grade_tier: str,
+    chapter_masteries: Dict[str, float],
+    misconceptions_cleared: int,
+    total_misconceptions: int = 17,
+) -> str:
+    """
+    Generates a prestigious, high-resolution CBSE Class 10 Physics
+    Certificate of Conceptual Competency & Board Exam Readiness Report.
+    """
+    rows_html = []
+    for ch_id, ch_data in CHAPTERS.items():
+        m_val = chapter_masteries.get(ch_id, 0.5)
+        pct = int(m_val * 100)
+        status_badge = (
+            '<span style="background:#ECFDF5;color:#065F46;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🟢 BOARD READY</span>'
+            if m_val >= 0.70 else
+            '<span style="background:#FFFBEB;color:#92400E;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🟡 DEVELOPING</span>'
+            if m_val >= 0.40 else
+            '<span style="background:#FFF1F2;color:#9F1239;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">🔴 GAP IDENTIFIED</span>'
+        )
+        bar_fill = "#10B981" if m_val >= 0.70 else "#F59E0B" if m_val >= 0.40 else "#EF4444"
+        rows_html.append(f"""
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <div style="width:42%; font-weight:600; font-size:13px; color:#1E293B;">{ch_data['name']}</div>
+            <div style="width:38%; margin: 0 12px;">
+                <div style="background:#E2E8F0; border-radius:8px; height:8px; overflow:hidden;">
+                    <div style="background:{bar_fill}; width:{pct}%; height:8px; border-radius:8px;"></div>
+                </div>
+            </div>
+            <div style="width:20%; text-align:right;">{status_badge}</div>
+        </div>
+        """)
+
+    return f"""
+    <div style="background:#FFFFFF; border:2px solid #E2E8F0; border-radius:20px; padding:32px 36px; box-shadow:0 10px 30px -5px rgba(0,0,0,0.06); font-family:'Inter', sans-serif; position:relative; overflow:hidden; max-width:850px; margin:auto;">
+        <!-- Top decorative ribbon -->
+        <div style="position:absolute; top:0; left:0; right:0; height:8px; background:linear-gradient(90deg, #2563EB, #3B82F6, #10B981);"></div>
+        
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px;">
+            <div>
+                <span style="background:#EFF6FF; color:#1D4ED8; font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; letter-spacing:0.5px;">OFFICIAL DIAGNOSTIC CREDENTIAL</span>
+                <h2 style="font-family:'Space Grotesk', sans-serif; margin:8px 0 2px 0; color:#0F172A; font-size:24px;">CBSE Class 10 Science (Physics)</h2>
+                <div style="color:#64748B; font-size:13px;">Cognitive Learner Evaluation & Board Readiness Assessment</div>
+            </div>
+            <div style="text-align:right;">
+                <div style="font-size:32px; font-weight:800; color:#2563EB; line-height:1;">{readiness_score}<span style="font-size:16px; color:#94A3B8;">/100</span></div>
+                <div style="font-size:12px; font-weight:700; color:#10B981;">{grade_tier}</div>
+            </div>
+        </div>
+
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:14px 18px; margin-bottom:24px; display:flex; justify-content:space-between;">
+            <div><small style="color:#64748B;">Candidate Nickname</small><br><b>{student_name}</b></div>
+            <div><small style="color:#64748B;">Enrolled Class</small><br><b>{class_code}</b></div>
+            <div><small style="color:#64748B;">Misconceptions Busted</small><br><b style="color:#059669;">{misconceptions_cleared} / {total_misconceptions}</b></div>
+            <div><small style="color:#64748B;">Verification Protocol</small><br><b>BKT + Rasch IRT</b></div>
+        </div>
+
+        <h4 style="margin:0 0 14px 0; font-size:15px; color:#0F172A;">Curriculum Chapter Mastery Breakdown</h4>
+        {''.join(rows_html)}
+
+        <div style="border-top:1px dashed #CBD5E1; margin-top:24px; padding-top:16px; display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#64748B;">
+            <div>Verified by ConceptPilot Adaptive Diagnostic Engine · Powered by Google Gemini 2.5 Flash</div>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <span style="color:#10B981;">●</span> Verified Authenticated Learning Session
+            </div>
+        </div>
+    </div>
+    """
 
 def simulate_circuit(
     mode: str,  # "series" or "parallel"
