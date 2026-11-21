@@ -7,3 +7,4 @@ data/*.db
 data/*.db-journal
 temp_files/
 .DS_Store
+scratch/
