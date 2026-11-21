@@ -285,6 +285,63 @@ st.markdown("""
   .chip-ai { background-color: #EFF6FF; color: #2563EB; border: 1px solid #BFDBFE; }
   .chip-verified { background-color: #DCFCE7; color: #15803D; }
 
+  /* Top-Level Main Section Tabs */
+  div[data-testid="stTabs"] > div[role="tablist"] {
+      gap: 12px;
+      margin-bottom: 24px;
+      border-bottom: 2px solid #E2E8F0;
+      padding-bottom: 4px;
+  }
+  
+  div[data-testid="stTabs"] > div[role="tablist"] button[data-baseweb="tab"] {
+      font-size: 15px !important;
+      font-weight: 700 !important;
+      color: #64748B !important;
+      padding: 10px 20px !important;
+      border-radius: 12px !important;
+      background: transparent !important;
+      transition: all 0.2s ease !important;
+  }
+  
+  div[data-testid="stTabs"] > div[role="tablist"] button[data-baseweb="tab"]:hover {
+      color: #2563EB !important;
+      background: #EFF6FF !important;
+  }
+  
+  div[data-testid="stTabs"] > div[role="tablist"] button[data-baseweb="tab"][aria-selected="true"] {
+      color: #2563EB !important;
+      background: #EFF6FF !important;
+      border-bottom: 3px solid #2563EB !important;
+  }
+
+  /* Sub-Section Pills (Nested Tabs) */
+  div[data-testid="stTabs"] div[data-testid="stTabs"] > div[role="tablist"] {
+      gap: 8px;
+      margin-top: 4px;
+      margin-bottom: 20px;
+      border-bottom: none !important;
+      background: #F1F5F9;
+      padding: 6px;
+      border-radius: 14px;
+  }
+  
+  div[data-testid="stTabs"] div[data-testid="stTabs"] > div[role="tablist"] button[data-baseweb="tab"] {
+      font-size: 13px !important;
+      font-weight: 600 !important;
+      color: #475569 !important;
+      padding: 7px 16px !important;
+      border-radius: 10px !important;
+      background: transparent !important;
+      border-bottom: none !important;
+  }
+  
+  div[data-testid="stTabs"] div[data-testid="stTabs"] > div[role="tablist"] button[data-baseweb="tab"][aria-selected="true"] {
+      color: #1D4ED8 !important;
+      background: #FFFFFF !important;
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08) !important;
+      border-bottom: none !important;
+  }
+
   /* Mobile responsiveness */
   @media (max-width: 768px) {
       .dribbble-card, .cp-card, .cp-banner, .cp-diagnosis-card, .ai-work-panel {
@@ -476,6 +533,127 @@ def compute_evaluation_metrics(mastery_dict, active_misc_dict):
 
     return score, grade, ch_masteries, cleared_count
 
+def render_diagnostic_question_view():
+    """Renders the active diagnostic question, options, reasoning input, and processes submission."""
+    q_count = len(s.diag_questions)
+    curr_q = s.diag_questions[s.diag_idx]
+    concept_id = curr_q["concept"]
+    concept_name = CONCEPTS[concept_id]["name"]
+    
+    # Progress bar
+    progress_val = float(s.diag_idx) / float(q_count)
+    st.progress(progress_val, text=f"Diagnostic Test: Question {s.diag_idx + 1} of {q_count} · Topic: {concept_name}")
+    
+    st.markdown(f"""
+    <div class="dribbble-card" style="border: 1px solid #BFDBFE; background: #FFFFFF; margin-top: 10px;">
+      <div style="margin-bottom: 8px;">
+        <span class="chip chip-med">DIAGNOSTIC QUESTION {s.diag_idx + 1} / {q_count}</span>
+        <span class="chip chip-bank">{concept_name}</span>
+      </div>
+      <h3 style="margin-top:4px;">{curr_q['question']}</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Answer form
+    form_key = f"diag_form_{curr_q['id']}_{s.diag_idx}"
+    with st.form(form_key):
+        selected_option = st.radio(
+            "Select your answer:",
+            options=range(4),
+            format_func=lambda idx: f"({chr(65+idx)}) {curr_q['options'][idx]}",
+            index=None,
+        )
+        
+        reasoning = st.text_input(
+            "Explain your reasoning in one line (Why did you choose this?):",
+            placeholder="e.g. Because electric charge is conserved and current cannot be consumed.",
+            max_chars=300,
+        )
+        
+        submit_diag = st.form_submit_button("Submit Answer 🚀", type="primary")
+        
+        if submit_diag:
+            if selected_option is None:
+                st.error("Please select an option before submitting.")
+            else:
+                with st.spinner("Analyzing your reasoning with diagnostic engine..."):
+                    is_correct = (selected_option == curr_q["answer_index"])
+                    
+                    # AI Call B: Misconception Diagnosis
+                    dx = diagnose_reasoning(
+                        q=curr_q,
+                        chosen_idx=selected_option,
+                        reasoning=reasoning,
+                        api_key_override=s.api_key_override,
+                    )
+                    
+                    has_misc = (dx["misconception"] in MISCONCEPTIONS)
+                    if has_misc:
+                        s.diag_misconceptions_found.append({
+                            "concept": concept_id,
+                            "mid": dx["misconception"],
+                            "evidence": dx["evidence"],
+                        })
+                        s.active_misconceptions[concept_id] = dx["misconception"]
+                    
+                    # Update BKT mastery
+                    old_m = s.mastery.get(concept_id, DEFAULT_PRIOR)
+                    new_m = update_bkt(
+                        prior_mastery=old_m,
+                        is_correct=is_correct,
+                        has_misconception=has_misc,
+                        misconception_confidence=dx["confidence"],
+                    )
+                    s.mastery[concept_id] = new_m
+                    
+                    # Log response in SQLite
+                    resp_id = log_response(
+                        student_id=s.student_id,
+                        question_id=curr_q["id"],
+                        concept=concept_id,
+                        chosen=selected_option,
+                        correct=is_correct,
+                        reasoning=reasoning,
+                        attempt=1,
+                    )
+                    if has_misc:
+                        log_misconception_event(
+                            student_id=s.student_id,
+                            response_id=resp_id,
+                            concept=concept_id,
+                            misconception_id=dx["misconception"],
+                            confidence=dx["confidence"],
+                            evidence=dx["evidence"],
+                            source="ai" if dx.get("is_ai") else "option",
+                        )
+                    
+                    # Item calibration update
+                    cal_b, n_ans, n_cor = get_item_calibration(curr_q["id"], curr_q["difficulty_label"])
+                    new_b = update_item_difficulty(
+                        current_b=cal_b,
+                        label_level=curr_q["difficulty_label"],
+                        student_mastery=old_m,
+                        is_correct=is_correct,
+                        n_responses=n_ans,
+                    )
+                    save_item_calibration(curr_q["id"], curr_q["difficulty_label"], new_b, is_correct)
+                    
+                    # Spaced repetition initial stability
+                    init_s = initial_stability_from_mastery(new_m)
+                    s.schedule[concept_id] = {
+                        "stability": init_s,
+                        "last_review_day": s.current_day,
+                        "due_day": s.current_day + init_s,
+                        "streak": 1 if is_correct else 0,
+                    }
+                    save_mastery_state(s.student_id, concept_id, new_m, init_s, s.current_day + init_s, 1 if is_correct else 0)
+                    
+                    # Move to next question
+                    s.diag_idx += 1
+                    if s.diag_idx >= q_count:
+                        s.phase = "diag_summary"
+                    st.rerun()
+
 # -----------------------------------------------------------------------------
 # SIDEBAR
 # -----------------------------------------------------------------------------
@@ -596,15 +774,16 @@ with st.sidebar:
 # MAIN APP: 7-TAB ARCHITECTURE (Modern Reyhan Adinata Dribbble UI)
 # -----------------------------------------------------------------------------
 
-tab_dash, tab_diag, tab_practice, tab_lab, tab_eval, tab_teacher, tab_about = st.tabs([
-    "🏠 Dashboard",
-    "🚀 Start Test",
-    "🎯 Adaptive Practice",
-    "⚡ Virtual Laboratory",
-    "📜 Final Evaluation & Result",
-    "📊 Teacher Dashboard",
-    "📖 Architecture & How It Works",
+# -----------------------------------------------------------------------------
+# MAIN APP NAVIGATION: HIERARCHICAL SECTIONS & SUB-SECTIONS (Modern EdTech UI)
+# -----------------------------------------------------------------------------
+tab_main_dash, tab_main_practice, tab_main_eval, tab_main_portal = st.tabs([
+    "🏠 Dashboard Overview",
+    "🎯 Practice & Learning Hub",
+    "📜 Final Evaluation & Results",
+    "📊 Educator & Research Portal",
 ])
+
 
 # Compute active evaluation metrics
 eval_score, eval_grade, eval_ch_masteries, eval_cleared_misc = compute_evaluation_metrics(s.mastery, s.active_misconceptions)
@@ -614,7 +793,7 @@ total_concepts_count = len(CONCEPTS)
 # =============================================================================
 # TAB 1: 🏠 DASHBOARD (Reyhan Adinata Dribbble Front Page & Metrics)
 # =============================================================================
-with tab_dash:
+with tab_main_dash:
     # Modern Search Bar + Student Status Pill (Image 1 aesthetic)
     st.markdown(f"""
     <div class="dribbble-search">
@@ -715,19 +894,17 @@ with tab_dash:
     """, unsafe_allow_html=True)
 
     if s.phase == "diag":
-        st.info(f"📝 **Diagnostic Test Currently in Progress:** Question {s.diag_idx + 1} of {len(s.diag_questions)}")
-        c_diag1, c_diag2 = st.columns([1, 1])
-        with c_diag1:
-            if st.button("Resume Diagnostic Test ➡️", type="primary", use_container_width=True, key="dash_resume_test"):
-                s.phase = "diag"
-                st.rerun()
-        with c_diag2:
-            if st.button("Restart Diagnostic Test 🔄", use_container_width=True, key="dash_restart_test"):
+        c_rst1, c_rst2 = st.columns([4, 1])
+        with c_rst1:
+            st.info(f"📝 **Diagnostic Assessment in Progress:** Question {s.diag_idx + 1} of {len(s.diag_questions)}")
+        with c_rst2:
+            if st.button("Restart Test 🔄", use_container_width=True, key="dash_restart_test"):
                 s.phase = "diag"
                 s.diag_idx = 0
                 s.diag_misconceptions_found = []
                 s.diag_questions = get_diagnostic_questions(s.active_chapter if s.active_chapter != "all" else None)
                 st.rerun()
+        render_diagnostic_question_view()
 
     elif s.phase in ("diag_summary", "adapt"):
         st.success(f"✅ **Baseline Diagnostic Assessment Completed!** Starting Mastery: **{eval_score}%** (Grade Track: **{eval_grade.split('·')[0].strip()}**)")
@@ -973,1095 +1150,1019 @@ with tab_dash:
 # =============================================================================
 # TAB 2: 📝 DIAGNOSTIC TEST (Baseline Assessment & Knowledge Map)
 # =============================================================================
-with tab_diag:
-    if s.phase not in ("diag", "diag_summary"):
-        st.markdown("""
-        <div class="dribbble-card">
-          <span class="chip chip-med">ORGANISER REQUIREMENT 1</span>
-          <h2 style="margin-top:6px;">📝 CBSE Class 10 Physics Diagnostic Assessment</h2>
-          <p>Before entering adaptive practice, take a brief 8-question benchmark test. 
-          Unlike standard tests, ConceptPilot prompts you for a <b>one-line physical reasoning explanation</b> 
-          on every question to diagnose latent mental models and research misconceptions.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        with st.form("start_diag_tab_form"):
-            st.markdown("#### Configure Your Diagnostic Assessment")
-            diag_nickname = st.text_input("Candidate Nickname:", value=s.nickname or "Aarav")
-            diag_class = st.text_input("Class Section:", value=s.class_code or "CLASS-10A")
-            
-            d_scope_choices = ["all", "light", "human_eye", "electricity", "magnetism"]
-            d_scope_labels = {
-                "all": "🌐 Full Physics (8 Balanced Cross-Chapter Questions)",
-                "light": "💡 Ch 9: Light (Mirrors & Lenses)",
-                "human_eye": "👁️ Ch 10: Human Eye & Colourful World",
-                "electricity": "⚡ Ch 11: Electricity",
-                "magnetism": "🧲 Ch 12: Magnetic Effects of Electric Current",
-            }
-            d_scope = st.selectbox(
-                "Diagnostic Scope:",
-                options=d_scope_choices,
-                format_func=lambda x: d_scope_labels[x],
-                index=0,
-            )
-            
-            start_btn = st.form_submit_button("Start Diagnostic Assessment 🚀", type="primary")
-            if start_btn:
-                s.nickname = diag_nickname.strip() or "Aarav"
-                s.class_code = diag_class.strip() or "CLASS-10A"
-                s.active_chapter = d_scope
-                save_student(s.student_id, s.nickname, s.class_code)
-                s.diag_questions = get_diagnostic_questions(d_scope if d_scope != "all" else None)
-                s.diag_idx = 0
-                s.phase = "diag"
+# =============================================================================
+# SECTION 2: 🎯 PRACTICE & LEARNING HUB
+# =============================================================================
+with tab_main_practice:
+    subtab_diag, subtab_practice, subtab_lab = st.tabs([
+        "🚀 Diagnostic Assessment (Start Test)",
+        "🎯 Adaptive Practice (AI Cognitive Tutor)",
+        "⚡ Virtual Laboratory & Formulas",
+    ])
+
+    with subtab_diag:
+        if s.phase not in ("diag", "diag_summary"):
+            st.markdown("""
+            <div class="dribbble-card">
+              <span class="chip chip-med">ORGANISER REQUIREMENT 1</span>
+              <h2 style="margin-top:6px;">📝 CBSE Class 10 Physics Diagnostic Assessment</h2>
+              <p>Before entering adaptive practice, take a brief 8-question benchmark test. 
+              Unlike standard tests, ConceptPilot prompts you for a <b>one-line physical reasoning explanation</b> 
+              on every question to diagnose latent mental models and research misconceptions.</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            with st.form("start_diag_tab_form"):
+                st.markdown("#### Configure Your Diagnostic Assessment")
+                diag_nickname = st.text_input("Candidate Nickname:", value=s.nickname or "Aarav")
+                diag_class = st.text_input("Class Section:", value=s.class_code or "CLASS-10A")
+
+                d_scope_choices = ["all", "light", "human_eye", "electricity", "magnetism"]
+                d_scope_labels = {
+                    "all": "🌐 Full Physics (8 Balanced Cross-Chapter Questions)",
+                    "light": "💡 Ch 9: Light (Mirrors & Lenses)",
+                    "human_eye": "👁️ Ch 10: Human Eye & Colourful World",
+                    "electricity": "⚡ Ch 11: Electricity",
+                    "magnetism": "🧲 Ch 12: Magnetic Effects of Electric Current",
+                }
+                d_scope = st.selectbox(
+                    "Diagnostic Scope:",
+                    options=d_scope_choices,
+                    format_func=lambda x: d_scope_labels[x],
+                    index=0,
+                )
+
+                start_btn = st.form_submit_button("Start Diagnostic Assessment 🚀", type="primary")
+                if start_btn:
+                    s.nickname = diag_nickname.strip() or "Aarav"
+                    s.class_code = diag_class.strip() or "CLASS-10A"
+                    s.active_chapter = d_scope
+                    save_student(s.student_id, s.nickname, s.class_code)
+                    s.diag_questions = get_diagnostic_questions(d_scope if d_scope != "all" else None)
+                    s.diag_idx = 0
+                    s.phase = "diag"
+                    st.rerun()
+
+        elif s.phase == "diag":
+            c_tr1, c_tr2 = st.columns([4, 1])
+            with c_tr1:
+                st.info(f"📝 **Diagnostic Assessment in Progress:** Question {s.diag_idx + 1} of {len(s.diag_questions)}")
+            with c_tr2:
+                if st.button("Restart Test 🔄", use_container_width=True, key="tab_diag_restart_test"):
+                    s.phase = "diag"
+                    s.diag_idx = 0
+                    s.diag_misconceptions_found = []
+                    s.diag_questions = get_diagnostic_questions(s.active_chapter if s.active_chapter != "all" else None)
+                    st.rerun()
+            render_diagnostic_question_view()
+
+        elif s.phase == "diag_summary":
+            st.balloons()
+            st.markdown(f"""
+            <div class="dribbble-card">
+              <span class="chip chip-verified">DIAGNOSTIC COMPLETED</span>
+              <h2 style="margin-top:6px;">🎯 Diagnostic Complete: Your Starting Knowledge Map</h2>
+              <p>Great work, <b>{s.nickname}</b>! We analyzed your answers and underlying physical reasoning. 
+              Here is your initial cognitive profile before adaptive practice begins.</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            col_g1, col_g2 = st.columns([1, 1])
+            with col_g1:
+                st.markdown("### 🕸️ Visual Prerequisite Graph")
+                st.caption("Prerequisite DAG: 🟢 Mastered (≥70%) · 🟡 Developing (40-69%) · 🔴 Gap (<40%)")
+                dot_str = render_concept_graph(s.mastery, s.get("active_chapter", "all"))
+                st.graphviz_chart(dot_str, use_container_width=True)
+
+            with col_g2:
+                st.markdown("### 🎯 Cognitive Mastery Radar")
+                st.caption("Competency profile against 70% CBSE target threshold:")
+                c_keys = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
+                radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=c_keys, width=540, height=440)
+                st.components.v1.html(radar_svg, height=450)
+
+            st.markdown("---")
+            st.markdown("### 🔍 Diagnostic Findings & Early Misconceptions")
+
+            diag_cids = list(set([q["concept"] for q in s.diag_questions])) if s.diag_questions else list(CONCEPTS.keys())
+            sorted_concepts = sorted([(cid, s.mastery.get(cid, DEFAULT_PRIOR)) for cid in diag_cids], key=lambda kv: kv[1])
+            weakest = sorted_concepts[0]
+            st.warning(f"⚠️ **Priority Focus Area:** {CONCEPTS[weakest[0]]['name']} ({int(weakest[1] * 100)}% starting mastery)")
+
+            if s.diag_misconceptions_found:
+                st.markdown("#### Detected Misconceptions in Reasoning:")
+                for m_found in s.diag_misconceptions_found:
+                    mid = m_found["mid"]
+                    m_data = MISCONCEPTIONS[mid]
+                    st.markdown(f"""
+                    <div style="background:#FFF1F2; border-left:4px solid #EF4444; padding:12px 16px; border-radius:8px; margin-bottom:10px;">
+                      <b>{m_data['label']}</b> (Topic: {CONCEPTS[m_found['concept']]['name']})<br>
+                      <small style="color:#64748B;"><i>"{m_found['evidence']}"</i></small><br>
+                      <span style="color:#0F172A;font-weight:600;">Correction:</span> {m_data['correction']}
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.success("✅ **No major foundational misconceptions detected!** Ready for advanced practice.")
+
+            st.markdown("---")
+            if st.button("Begin Adaptive Practice 🚀", type="primary", use_container_width=True):
+                s.phase = "adapt"
+                s.current_q = None
+                s.attempt = 0
+                s.last_result = None
+                s.last_diagnosis = None
                 st.rerun()
 
-    elif s.phase == "diag":
-        q_count = len(s.diag_questions)
-        curr_q = s.diag_questions[s.diag_idx]
-        concept_id = curr_q["concept"]
-        concept_name = CONCEPTS[concept_id]["name"]
-        
-        # Progress bar
-        progress_val = float(s.diag_idx) / float(q_count)
-        st.progress(progress_val, text=f"Diagnostic Test: Question {s.diag_idx + 1} of {q_count} · Topic: {concept_name}")
-        
-        st.markdown(f"""
-        <div class="dribbble-card">
-          <div style="margin-bottom: 8px;">
-            <span class="chip chip-med">DIAGNOSTIC QUESTION {s.diag_idx + 1} / {q_count}</span>
-            <span class="chip chip-bank">{concept_name}</span>
-          </div>
-          <h3 style="margin-top:4px;">{curr_q['question']}</h3>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Answer form
-        form_key = f"diag_form_{curr_q['id']}_{s.diag_idx}"
-        with st.form(form_key):
-            selected_option = st.radio(
-                "Select your answer:",
-                options=range(4),
-                format_func=lambda idx: f"({chr(65+idx)}) {curr_q['options'][idx]}",
-                index=None,
-            )
-            
-            reasoning = st.text_input(
-                "Explain your reasoning in one line (Why did you choose this?):",
-                placeholder="e.g. Because electric charge is conserved and current cannot be consumed.",
-                max_chars=300,
-            )
-            
-            submit_diag = st.form_submit_button("Submit Answer", type="primary")
-            
-            if submit_diag:
-                if selected_option is None:
-                    st.error("Please select an option before submitting.")
-                else:
-                    with st.spinner("Analyzing your reasoning with diagnostic engine..."):
-                        is_correct = (selected_option == curr_q["answer_index"])
-                        
-                        # AI Call B: Misconception Diagnosis
-                        dx = diagnose_reasoning(
-                            q=curr_q,
-                            chosen_idx=selected_option,
-                            reasoning=reasoning,
-                            api_key_override=s.api_key_override,
-                        )
-                        
-                        has_misc = (dx["misconception"] in MISCONCEPTIONS)
-                        if has_misc:
-                            s.diag_misconceptions_found.append({
-                                "concept": concept_id,
-                                "mid": dx["misconception"],
-                                "evidence": dx["evidence"],
-                            })
-                            s.active_misconceptions[concept_id] = dx["misconception"]
-                        
-                        # Update BKT mastery
-                        old_m = s.mastery.get(concept_id, DEFAULT_PRIOR)
-                        new_m = update_bkt(
-                            prior_mastery=old_m,
-                            is_correct=is_correct,
-                            has_misconception=has_misc,
-                            misconception_confidence=dx["confidence"],
-                        )
-                        s.mastery[concept_id] = new_m
-                        
-                        # Log response in SQLite
-                        resp_id = log_response(
-                            student_id=s.student_id,
-                            question_id=curr_q["id"],
-                            concept=concept_id,
-                            chosen=selected_option,
-                            correct=is_correct,
-                            reasoning=reasoning,
-                            attempt=1,
-                        )
-                        if has_misc:
-                            log_misconception_event(
-                                student_id=s.student_id,
-                                response_id=resp_id,
-                                concept=concept_id,
-                                misconception_id=dx["misconception"],
-                                confidence=dx["confidence"],
-                                evidence=dx["evidence"],
-                                source="ai" if dx.get("is_ai") else "option",
+
+    # =============================================================================
+    # TAB 3: 🎯 ADAPTIVE PRACTICE (AI Cognitive Tutor & Misconception Buster)
+    # =============================================================================
+    with subtab_practice:
+        # 1. Select or generate next question if not currently active
+        if s.current_q is None:
+            due_cids = get_due_concepts(s.schedule, s.current_day)
+            allowed = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
+            target_cid, selection_reason = select_next_practice_concept(s.mastery, due_cids, allowed_concepts=allowed)
+            target_diff = target_difficulty_for_mastery(s.mastery.get(target_cid, DEFAULT_PRIOR))
+            active_m = s.active_misconceptions.get(target_cid)
+
+            chosen_q = None
+            question_rationale = ""
+
+            # Attempt AI Question Generation (Call A) + Verification (Call A2) if API connected
+            if get_api_key(s.api_key_override):
+                with st.spinner("AI drafting and self-verifying targeted question..."):
+                    samples = get_questions_for_concept(target_cid)
+                    gen_q = generate_targeted_question(
+                        concept=target_cid,
+                        difficulty_level=target_diff,
+                        active_misconception=active_m,
+                        sample_questions=samples,
+                        api_key_override=s.api_key_override,
+                    )
+                    if gen_q:
+                        is_verified = verify_generated_question(gen_q, api_key_override=s.api_key_override)
+                        if is_verified:
+                            gen_q["verified"] = True
+                            chosen_q = gen_q
+                            question_rationale = (
+                                f"AI-generated Level {target_diff} question independently verified by second solver pass "
+                                f"(aimed at {MISCONCEPTIONS[active_m]['label'] if active_m else 'core mastery'})."
                             )
-                        
-                        # Item calibration update
-                        cal_b, n_ans, n_cor = get_item_calibration(curr_q["id"], curr_q["difficulty_label"])
-                        new_b = update_item_difficulty(
-                            current_b=cal_b,
-                            label_level=curr_q["difficulty_label"],
-                            student_mastery=old_m,
-                            is_correct=is_correct,
-                            n_responses=n_ans,
-                        )
-                        save_item_calibration(curr_q["id"], curr_q["difficulty_label"], new_b, is_correct)
-                        
-                        # Spaced repetition initial stability
-                        init_s = initial_stability_from_mastery(new_m)
-                        s.schedule[concept_id] = {
-                            "stability": init_s,
-                            "last_review_day": s.current_day,
-                            "due_day": s.current_day + init_s,
-                            "streak": 1 if is_correct else 0,
-                        }
-                        save_mastery_state(s.student_id, concept_id, new_m, init_s, s.current_day + init_s, 1 if is_correct else 0)
-                        
-                        # Move to next question
-                        s.diag_idx += 1
-                        if s.diag_idx >= q_count:
-                            s.phase = "diag_summary"
-                        st.rerun()
 
-    elif s.phase == "diag_summary":
-        st.balloons()
-        st.markdown(f"""
-        <div class="dribbble-card">
-          <span class="chip chip-verified">DIAGNOSTIC COMPLETED</span>
-          <h2 style="margin-top:6px;">🎯 Diagnostic Complete: Your Starting Knowledge Map</h2>
-          <p>Great work, <b>{s.nickname}</b>! We analyzed your answers and underlying physical reasoning. 
-          Here is your initial cognitive profile before adaptive practice begins.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        col_g1, col_g2 = st.columns([1, 1])
-        with col_g1:
-            st.markdown("### 🕸️ Visual Prerequisite Graph")
-            st.caption("Prerequisite DAG: 🟢 Mastered (≥70%) · 🟡 Developing (40-69%) · 🔴 Gap (<40%)")
-            dot_str = render_concept_graph(s.mastery, s.get("active_chapter", "all"))
-            st.graphviz_chart(dot_str, use_container_width=True)
-            
-        with col_g2:
-            st.markdown("### 🎯 Cognitive Mastery Radar")
-            st.caption("Competency profile against 70% CBSE target threshold:")
-            c_keys = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
-            radar_svg = generate_mastery_radar_chart_svg(s.mastery, concept_keys=c_keys, width=540, height=440)
-            st.components.v1.html(radar_svg, height=450)
+            # Fall back to Question Bank if AI is offline or generation didn't verify
+            if not chosen_q:
+                chosen_q, bank_rationale = select_next_question(
+                    concept=target_cid,
+                    mastery_val=s.mastery.get(target_cid, DEFAULT_PRIOR),
+                    active_misconception=active_m,
+                    asked_question_ids=s.asked_ids,
+                    question_pool=QUESTION_BANK,
+                )
+                question_rationale = bank_rationale
 
-        st.markdown("---")
-        st.markdown("### 🔍 Diagnostic Findings & Early Misconceptions")
-        
-        diag_cids = list(set([q["concept"] for q in s.diag_questions])) if s.diag_questions else list(CONCEPTS.keys())
-        sorted_concepts = sorted([(cid, s.mastery.get(cid, DEFAULT_PRIOR)) for cid in diag_cids], key=lambda kv: kv[1])
-        weakest = sorted_concepts[0]
-        st.warning(f"⚠️ **Priority Focus Area:** {CONCEPTS[weakest[0]]['name']} ({int(weakest[1] * 100)}% starting mastery)")
-        
-        if s.diag_misconceptions_found:
-            st.markdown("#### Detected Misconceptions in Reasoning:")
-            for m_found in s.diag_misconceptions_found:
-                mid = m_found["mid"]
-                m_data = MISCONCEPTIONS[mid]
-                st.markdown(f"""
-                <div style="background:#FFF1F2; border-left:4px solid #EF4444; padding:12px 16px; border-radius:8px; margin-bottom:10px;">
-                  <b>{m_data['label']}</b> (Topic: {CONCEPTS[m_found['concept']]['name']})<br>
-                  <small style="color:#64748B;"><i>"{m_found['evidence']}"</i></small><br>
-                  <span style="color:#0F172A;font-weight:600;">Correction:</span> {m_data['correction']}
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.success("✅ **No major foundational misconceptions detected!** Ready for advanced practice.")
-
-        st.markdown("---")
-        if st.button("Begin Adaptive Practice 🚀", type="primary", use_container_width=True):
-            s.phase = "adapt"
-            s.current_q = None
+            s.current_q = chosen_q
+            s.selection_reason = f"{selection_reason} {question_rationale}"
             s.attempt = 0
             s.last_result = None
             s.last_diagnosis = None
-            st.rerun()
+            s.probe_question = None
 
+        q = s.current_q
+        cid = q["concept"]
+        c_name = CONCEPTS[cid]["name"]
+        diff_label = q["difficulty_label"]
+        diff_chip_class = "chip-easy" if diff_label == 1 else "chip-med" if diff_label == 2 else "chip-hard"
+        diff_text = "LEVEL 1 · FOUNDATIONAL" if diff_label == 1 else "LEVEL 2 · APPLICATION" if diff_label == 2 else "LEVEL 3 · SYNTHESIS"
 
-# =============================================================================
-# TAB 3: 🎯 ADAPTIVE PRACTICE (AI Cognitive Tutor & Misconception Buster)
-# =============================================================================
-with tab_practice:
-    # 1. Select or generate next question if not currently active
-    if s.current_q is None:
-        due_cids = get_due_concepts(s.schedule, s.current_day)
-        allowed = CHAPTERS[s.active_chapter]["concepts"] if s.get("active_chapter", "all") != "all" else None
-        target_cid, selection_reason = select_next_practice_concept(s.mastery, due_cids, allowed_concepts=allowed)
-        target_diff = target_difficulty_for_mastery(s.mastery.get(target_cid, DEFAULT_PRIOR))
-        active_m = s.active_misconceptions.get(target_cid)
+        # Selection Rationale Banner (Section 6.3)
+        st.markdown(f"""
+        <div class="cp-banner">
+          🎯 <b>Why this question was chosen:</b> {s.selection_reason}
+        </div>
+        """, unsafe_allow_html=True)
 
-        chosen_q = None
-        question_rationale = ""
+        # Question Header Chips
+        source_chip = (
+            '<span class="chip chip-ai">🤖 AI-GENERATED</span><span class="chip chip-verified">✓ VERIFIED SOLVER PASS</span>'
+            if q.get("is_ai")
+            else '<span class="chip chip-bank">📚 VERIFIED QUESTION BANK</span>'
+        )
 
-        # Attempt AI Question Generation (Call A) + Verification (Call A2) if API connected
-        if get_api_key(s.api_key_override):
-            with st.spinner("AI drafting and self-verifying targeted question..."):
-                samples = get_questions_for_concept(target_cid)
-                gen_q = generate_targeted_question(
-                    concept=target_cid,
-                    difficulty_level=target_diff,
-                    active_misconception=active_m,
-                    sample_questions=samples,
-                    api_key_override=s.api_key_override,
-                )
-                if gen_q:
-                    is_verified = verify_generated_question(gen_q, api_key_override=s.api_key_override)
-                    if is_verified:
-                        gen_q["verified"] = True
-                        chosen_q = gen_q
-                        question_rationale = (
-                            f"AI-generated Level {target_diff} question independently verified by second solver pass "
-                            f"(aimed at {MISCONCEPTIONS[active_m]['label'] if active_m else 'core mastery'})."
+        # Question Card
+        st.markdown(f"""
+        <div class="dribbble-card">
+          <div style="margin-bottom: 10px;">
+            <span class="chip {diff_chip_class}">{diff_text}</span>
+            <span class="chip chip-bank">{c_name}</span>
+            {source_chip}
+          </div>
+          <h3 style="margin-top:4px;">{q['question']}</h3>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # STATE A: Follow-up Probe Question (Call C) if reasoning was UNCLEAR
+        if s.last_result == "probe":
+            st.info(f"🤔 **Clarification Check:** {s.probe_question}")
+            with st.form("probe_form"):
+                probe_answer = st.text_input("Your brief clarification:", placeholder="Explain in a few words...")
+                if st.form_submit_button("Submit Clarification", type="primary"):
+                    with st.spinner("Refining diagnostic model..."):
+                        combined_reason = f"{s.get('prev_reason', '')}; Clarification: {probe_answer}"
+                        dx = diagnose_reasoning(
+                            q=q,
+                            chosen_idx=s.get("prev_choice", 0),
+                            reasoning=combined_reason,
+                            api_key_override=s.api_key_override,
                         )
+                        s.last_diagnosis = dx
+                        s.last_result = "done"
+                        st.rerun()
 
-        # Fall back to Question Bank if AI is offline or generation didn't verify
-        if not chosen_q:
-            chosen_q, bank_rationale = select_next_question(
-                concept=target_cid,
-                mastery_val=s.mastery.get(target_cid, DEFAULT_PRIOR),
-                active_misconception=active_m,
-                asked_question_ids=s.asked_ids,
-                question_pool=QUESTION_BANK,
-            )
-            question_rationale = bank_rationale
+        # STATE B: Awaiting first or retry answer submission
+        elif s.last_result in (None, "retry"):
+            if s.last_result == "retry":
+                st.info(f"💡 **Socratic Hint:** {s.last_diagnosis['hint']} *(You have 1 retry remaining)*")
 
-        s.current_q = chosen_q
-        s.selection_reason = f"{selection_reason} {question_rationale}"
-        s.attempt = 0
-        s.last_result = None
-        s.last_diagnosis = None
-        s.probe_question = None
-
-    q = s.current_q
-    cid = q["concept"]
-    c_name = CONCEPTS[cid]["name"]
-    diff_label = q["difficulty_label"]
-    diff_chip_class = "chip-easy" if diff_label == 1 else "chip-med" if diff_label == 2 else "chip-hard"
-    diff_text = "LEVEL 1 · FOUNDATIONAL" if diff_label == 1 else "LEVEL 2 · APPLICATION" if diff_label == 2 else "LEVEL 3 · SYNTHESIS"
-
-    # Selection Rationale Banner (Section 6.3)
-    st.markdown(f"""
-    <div class="cp-banner">
-      🎯 <b>Why this question was chosen:</b> {s.selection_reason}
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Question Header Chips
-    source_chip = (
-        '<span class="chip chip-ai">🤖 AI-GENERATED</span><span class="chip chip-verified">✓ VERIFIED SOLVER PASS</span>'
-        if q.get("is_ai")
-        else '<span class="chip chip-bank">📚 VERIFIED QUESTION BANK</span>'
-    )
-
-    # Question Card
-    st.markdown(f"""
-    <div class="dribbble-card">
-      <div style="margin-bottom: 10px;">
-        <span class="chip {diff_chip_class}">{diff_text}</span>
-        <span class="chip chip-bank">{c_name}</span>
-        {source_chip}
-      </div>
-      <h3 style="margin-top:4px;">{q['question']}</h3>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # STATE A: Follow-up Probe Question (Call C) if reasoning was UNCLEAR
-    if s.last_result == "probe":
-        st.info(f"🤔 **Clarification Check:** {s.probe_question}")
-        with st.form("probe_form"):
-            probe_answer = st.text_input("Your brief clarification:", placeholder="Explain in a few words...")
-            if st.form_submit_button("Submit Clarification", type="primary"):
-                with st.spinner("Refining diagnostic model..."):
-                    combined_reason = f"{s.get('prev_reason', '')}; Clarification: {probe_answer}"
-                    dx = diagnose_reasoning(
-                        q=q,
-                        chosen_idx=s.get("prev_choice", 0),
-                        reasoning=combined_reason,
-                        api_key_override=s.api_key_override,
-                    )
-                    s.last_diagnosis = dx
-                    s.last_result = "done"
-                    st.rerun()
-
-    # STATE B: Awaiting first or retry answer submission
-    elif s.last_result in (None, "retry"):
-        if s.last_result == "retry":
-            st.info(f"💡 **Socratic Hint:** {s.last_diagnosis['hint']} *(You have 1 retry remaining)*")
-
-        form_key = f"practice_form_{q['id']}_{len(s.history)}_{s.attempt}"
-        with st.form(form_key):
-            selected_opt = st.radio(
-                "Choose one option:",
-                options=range(4),
-                format_func=lambda idx: f"({chr(65+idx)}) {q['options'][idx]}",
-                index=None,
-            )
-            
-            why_text = ""
-            if s.attempt == 0:
-                why_text = st.text_input(
-                    "Why did you choose this? (One-line physical reasoning)",
-                    placeholder="e.g. Because parallel resistors provide alternate paths, decreasing total resistance.",
-                    max_chars=300,
+            form_key = f"practice_form_{q['id']}_{len(s.history)}_{s.attempt}"
+            with st.form(form_key):
+                selected_opt = st.radio(
+                    "Choose one option:",
+                    options=range(4),
+                    format_func=lambda idx: f"({chr(65+idx)}) {q['options'][idx]}",
+                    index=None,
                 )
 
-            submit_btn = st.form_submit_button("Submit Answer", type="primary")
+                why_text = ""
+                if s.attempt == 0:
+                    why_text = st.text_input(
+                        "Why did you choose this? (One-line physical reasoning)",
+                        placeholder="e.g. Because parallel resistors provide alternate paths, decreasing total resistance.",
+                        max_chars=300,
+                    )
 
-            if submit_btn:
-                if selected_opt is None:
-                    st.error("Please select an answer choice.")
-                else:
-                    is_correct = (selected_opt == q["answer_index"])
-                    
-                    if s.attempt == 0:
-                        with st.spinner("AI evaluating reasoning against PER misconception models..."):
-                            dx = diagnose_reasoning(
-                                q=q,
-                                chosen_idx=selected_opt,
-                                reasoning=why_text,
-                                api_key_override=s.api_key_override,
-                            )
-                            s.last_diagnosis = dx
-                            has_misc = (dx["misconception"] in MISCONCEPTIONS)
-                            
-                            # Call C check: UNCLEAR reasoning prompts follow-up probe
-                            if dx["misconception"] == "UNCLEAR" and dx.get("is_ai"):
-                                probe_q = generate_followup_probe(
+                submit_btn = st.form_submit_button("Submit Answer", type="primary")
+
+                if submit_btn:
+                    if selected_opt is None:
+                        st.error("Please select an answer choice.")
+                    else:
+                        is_correct = (selected_opt == q["answer_index"])
+
+                        if s.attempt == 0:
+                            with st.spinner("AI evaluating reasoning against PER misconception models..."):
+                                dx = diagnose_reasoning(
                                     q=q,
                                     chosen_idx=selected_opt,
                                     reasoning=why_text,
                                     api_key_override=s.api_key_override,
                                 )
-                                s.probe_question = probe_q
-                                s.prev_choice = selected_opt
-                                s.prev_reason = why_text
-                                s.last_result = "probe"
-                                st.rerun()
+                                s.last_diagnosis = dx
+                                has_misc = (dx["misconception"] in MISCONCEPTIONS)
 
-                            # Update BKT mastery on FIRST attempt only
-                            old_m = s.mastery.get(cid, DEFAULT_PRIOR)
-                            new_m = update_bkt(
-                                prior_mastery=old_m,
-                                is_correct=is_correct,
-                                has_misconception=has_misc,
-                                misconception_confidence=dx["confidence"],
-                            )
-                            s.mastery[cid] = new_m
+                                # Call C check: UNCLEAR reasoning prompts follow-up probe
+                                if dx["misconception"] == "UNCLEAR" and dx.get("is_ai"):
+                                    probe_q = generate_followup_probe(
+                                        q=q,
+                                        chosen_idx=selected_opt,
+                                        reasoning=why_text,
+                                        api_key_override=s.api_key_override,
+                                    )
+                                    s.probe_question = probe_q
+                                    s.prev_choice = selected_opt
+                                    s.prev_reason = why_text
+                                    s.last_result = "probe"
+                                    st.rerun()
 
-                            # Update Spaced Repetition stability
-                            old_stab = s.schedule[cid].get("stability", 1.0)
-                            last_rev = s.schedule[cid].get("last_review_day", s.current_day)
-                            new_stab = update_concept_stability(
-                                current_s=old_stab,
-                                last_review_day=last_rev,
-                                current_day=s.current_day,
-                                is_success=is_correct,
-                                has_misconception=has_misc,
-                            )
-                            new_streak = s.schedule[cid].get("streak", 0) + 1 if (is_correct and not has_misc) else 0
-                            s.schedule[cid] = {
-                                "stability": new_stab,
-                                "last_review_day": s.current_day,
-                                "due_day": s.current_day + new_stab,
-                                "streak": new_streak,
-                            }
-                            save_mastery_state(s.student_id, cid, new_m, new_stab, s.current_day + new_stab, new_streak)
-
-                            # Log response
-                            resp_id = log_response(
-                                student_id=s.student_id,
-                                question_id=q["id"],
-                                concept=cid,
-                                chosen=selected_opt,
-                                correct=is_correct,
-                                reasoning=why_text,
-                                attempt=1,
-                            )
-                            if has_misc:
-                                log_misconception_event(
-                                    student_id=s.student_id,
-                                    response_id=resp_id,
-                                    concept=cid,
-                                    misconception_id=dx["misconception"],
-                                    confidence=dx["confidence"],
-                                    evidence=dx["evidence"],
-                                    source="ai" if dx.get("is_ai") else "option",
+                                # Update BKT mastery on FIRST attempt only
+                                old_m = s.mastery.get(cid, DEFAULT_PRIOR)
+                                new_m = update_bkt(
+                                    prior_mastery=old_m,
+                                    is_correct=is_correct,
+                                    has_misconception=has_misc,
+                                    misconception_confidence=dx["confidence"],
                                 )
-                                s.active_misconceptions[cid] = dx["misconception"]
-                            elif is_correct:
-                                s.active_misconceptions.pop(cid, None)
+                                s.mastery[cid] = new_m
 
-                            # Calibrate item difficulty
-                            cal_b, n_ans, n_cor = get_item_calibration(q["id"], q["difficulty_label"])
-                            new_b = update_item_difficulty(
-                                current_b=cal_b,
-                                label_level=q["difficulty_label"],
-                                student_mastery=old_m,
-                                is_correct=is_correct,
-                                n_responses=n_ans,
-                            )
-                            save_item_calibration(q["id"], q["difficulty_label"], new_b, is_correct)
-                            s.asked_ids.add(q["id"])
+                                # Update Spaced Repetition stability
+                                old_stab = s.schedule[cid].get("stability", 1.0)
+                                last_rev = s.schedule[cid].get("last_review_day", s.current_day)
+                                new_stab = update_concept_stability(
+                                    current_s=old_stab,
+                                    last_review_day=last_rev,
+                                    current_day=s.current_day,
+                                    is_success=is_correct,
+                                    has_misconception=has_misc,
+                                )
+                                new_streak = s.schedule[cid].get("streak", 0) + 1 if (is_correct and not has_misc) else 0
+                                s.schedule[cid] = {
+                                    "stability": new_stab,
+                                    "last_review_day": s.current_day,
+                                    "due_day": s.current_day + new_stab,
+                                    "streak": new_streak,
+                                }
+                                save_mastery_state(s.student_id, cid, new_m, new_stab, s.current_day + new_stab, new_streak)
 
-                    if is_correct:
-                        s.last_result = "done"
-                    elif s.attempt == 0:
-                        s.last_result = "retry"
-                        s.attempt = 1
-                    else:
-                        s.last_result = "done"
+                                # Log response
+                                resp_id = log_response(
+                                    student_id=s.student_id,
+                                    question_id=q["id"],
+                                    concept=cid,
+                                    chosen=selected_opt,
+                                    correct=is_correct,
+                                    reasoning=why_text,
+                                    attempt=1,
+                                )
+                                if has_misc:
+                                    log_misconception_event(
+                                        student_id=s.student_id,
+                                        response_id=resp_id,
+                                        concept=cid,
+                                        misconception_id=dx["misconception"],
+                                        confidence=dx["confidence"],
+                                        evidence=dx["evidence"],
+                                        source="ai" if dx.get("is_ai") else "option",
+                                    )
+                                    s.active_misconceptions[cid] = dx["misconception"]
+                                elif is_correct:
+                                    s.active_misconceptions.pop(cid, None)
 
-                    st.rerun()
+                                # Calibrate item difficulty
+                                cal_b, n_ans, n_cor = get_item_calibration(q["id"], q["difficulty_label"])
+                                new_b = update_item_difficulty(
+                                    current_b=cal_b,
+                                    label_level=q["difficulty_label"],
+                                    student_mastery=old_m,
+                                    is_correct=is_correct,
+                                    n_responses=n_ans,
+                                )
+                                save_item_calibration(q["id"], q["difficulty_label"], new_b, is_correct)
+                                s.asked_ids.add(q["id"])
 
-    # STATE C: Answer finalized (Correct or 2 attempts complete)
-    else:
-        st.success(f"✅ **Correct Answer:** ({chr(65 + q['answer_index'])}) {q['options'][q['answer_index']]}")
-        
-        # Step-by-step scientific explanation
-        st.markdown(f"""
-        <div class="dribbble-card">
-          <b>Explanation:</b><br>
-          {q['explanation']}<br><br>
-          <small style="color:#64748B;"><b>Curriculum Reference:</b> {q['source_note']}</small>
-        </div>
-        """, unsafe_allow_html=True)
+                        if is_correct:
+                            s.last_result = "done"
+                        elif s.attempt == 0:
+                            s.last_result = "retry"
+                            s.attempt = 1
+                        else:
+                            s.last_result = "done"
 
-        # Diagnosis Card & "AI at Work" Panel (Section 7)
-        dx = s.last_diagnosis
-        if dx:
-            mid = dx["misconception"]
-            if mid in MISCONCEPTIONS:
-                m_info = MISCONCEPTIONS[mid]
-                st.markdown(f"""
-                <div class="cp-diagnosis-card">
-                  <b style="color:#1E40AF;">🧠 Diagnostic Insight: Misconception Detected</b><br>
-                  <b>{m_info['label']}</b> (Confidence: {int(dx['confidence'] * 100)}%)<br>
-                  <i style="color:#4B5563;">Evidence Cited: "{dx['evidence']}"</i><br><br>
-                  <b>Scientific Correction:</b> {m_info['correction']}
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div class="cp-diagnosis-card" style="border-left-color:#10B981;background-color:#F0FDF4;">
-                  <b style="color:#065F46;">✅ Scientific Reasoning Sound</b><br>
-                  <i>{dx['evidence']}</i>
-                </div>
-                """, unsafe_allow_html=True)
+                        st.rerun()
 
-            # "AI at Work" Transparency Panel
-            cache_tag = "⚡ Cached Result" if dx.get("cached") else "🌐 Live Gemini Inference"
-            engine_tag = "Google Gemini 2.5 Flash" if dx.get("is_ai") else "Offline Heuristic Fallback"
+        # STATE C: Answer finalized (Correct or 2 attempts complete)
+        else:
+            st.success(f"✅ **Correct Answer:** ({chr(65 + q['answer_index'])}) {q['options'][q['answer_index']]}")
+
+            # Step-by-step scientific explanation
             st.markdown(f"""
-            <div class="ai-work-panel">
-              <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-                <b>🤖 AI At Work (Call B Transparency)</b>
-                <small style="color:#64748B;">{engine_tag} · {cache_tag}</small>
-              </div>
-              <b>Input Inspected:</b> {dx.get('ai_read', 'Student response data')}<br>
-              <b>Evaluation Output:</b> Misconception ID <code>{dx['misconception']}</code> · Confidence: {int(dx['confidence'] * 100)}%<br>
-              <b>Evidence Cited:</b> <i>"{dx['evidence']}"</i><br>
-              <b>Verification Pass:</b> {"Independent solver verified key before presentation" if q.get("verified") else "Standard curriculum validation"}
+            <div class="dribbble-card">
+              <b>Explanation:</b><br>
+              {q['explanation']}<br><br>
+              <small style="color:#64748B;"><b>Curriculum Reference:</b> {q['source_note']}</small>
             </div>
             """, unsafe_allow_html=True)
 
-        if st.button("Next Question ➡️", type="primary"):
-            s.current_q = None
-            s.attempt = 0
-            s.last_result = None
-            s.last_diagnosis = None
-            s.probe_question = None
-            st.rerun()
+            # Diagnosis Card & "AI at Work" Panel (Section 7)
+            dx = s.last_diagnosis
+            if dx:
+                mid = dx["misconception"]
+                if mid in MISCONCEPTIONS:
+                    m_info = MISCONCEPTIONS[mid]
+                    st.markdown(f"""
+                    <div class="cp-diagnosis-card">
+                      <b style="color:#1E40AF;">🧠 Diagnostic Insight: Misconception Detected</b><br>
+                      <b>{m_info['label']}</b> (Confidence: {int(dx['confidence'] * 100)}%)<br>
+                      <i style="color:#4B5563;">Evidence Cited: "{dx['evidence']}"</i><br><br>
+                      <b>Scientific Correction:</b> {m_info['correction']}
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="cp-diagnosis-card" style="border-left-color:#10B981;background-color:#F0FDF4;">
+                      <b style="color:#065F46;">✅ Scientific Reasoning Sound</b><br>
+                      <i>{dx['evidence']}</i>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # "AI at Work" Transparency Panel
+                cache_tag = "⚡ Cached Result" if dx.get("cached") else "🌐 Live Gemini Inference"
+                engine_tag = "Google Gemini 2.5 Flash" if dx.get("is_ai") else "Offline Heuristic Fallback"
+                st.markdown(f"""
+                <div class="ai-work-panel">
+                  <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                    <b>🤖 AI At Work (Call B Transparency)</b>
+                    <small style="color:#64748B;">{engine_tag} · {cache_tag}</small>
+                  </div>
+                  <b>Input Inspected:</b> {dx.get('ai_read', 'Student response data')}<br>
+                  <b>Evaluation Output:</b> Misconception ID <code>{dx['misconception']}</code> · Confidence: {int(dx['confidence'] * 100)}%<br>
+                  <b>Evidence Cited:</b> <i>"{dx['evidence']}"</i><br>
+                  <b>Verification Pass:</b> {"Independent solver verified key before presentation" if q.get("verified") else "Standard curriculum validation"}
+                </div>
+                """, unsafe_allow_html=True)
+
+            if st.button("Next Question ➡️", type="primary"):
+                s.current_q = None
+                s.attempt = 0
+                s.last_result = None
+                s.last_diagnosis = None
+                s.probe_question = None
+                st.rerun()
 
 
-# =============================================================================
-# TAB 4: ⚡ VIRTUAL LABORATORY (Circuit Lab & NCERT Formula Reference)
-# =============================================================================
-with tab_lab:
-    st.markdown("""
-    <div class="dribbble-card">
-      <span class="chip chip-med">INTERACTIVE EXPERIMENTATION</span>
-      <h2 style="margin-top:6px;">⚡ Virtual Circuit Laboratory & NCERT Formula Cards</h2>
-      <p>Bust circuit misconceptions hands-on. Experiment with live sliders to observe how 
-      Series vs Parallel connections change current and equivalent resistance in real-time.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    lab_c1, lab_c2 = st.columns([1, 1])
-    with lab_c1:
-        st.markdown("#### Circuit Controls")
-        circuit_mode = st.radio(
-            "Circuit Configuration:",
-            options=["Series", "Parallel"],
-            horizontal=True,
-            key="lab_circuit_mode"
-        )
-        v_source = st.slider("Battery Voltage (V):", min_value=1.0, max_value=24.0, value=12.0, step=1.0, key="lab_v")
-        r1_val = st.slider("Resistor R1 (Ω):", min_value=1.0, max_value=50.0, value=6.0, step=1.0, key="lab_r1")
-        r2_val = st.slider("Resistor R2 (Ω):", min_value=1.0, max_value=50.0, value=12.0, step=1.0, key="lab_r2")
-
-    sim_res = simulate_circuit(circuit_mode, v_source, r1_val, r2_val)
-
-    with lab_c2:
-        st.markdown(f"#### Laboratory Readings ({sim_res['mode']} Circuit)")
-        sim_m1, sim_m2 = st.columns(2)
-        with sim_m1:
-            st.metric("Equivalent Resistance (Req)", f"{sim_res['r_eq']} Ω")
-            st.metric("Branch 1: Current / Volt", f"{sim_res['i1']} A / {sim_res['v1']} V")
-        with sim_m2:
-            st.metric("Total Circuit Current (Itot)", f"{sim_res['i_total']} A")
-            st.metric("Branch 2: Current / Volt", f"{sim_res['i2']} A / {sim_res['v2']} V")
-        st.metric("Total Circuit Power", f"{sim_res['p_total']} W", help="P = V × I")
-
-    st.info(f"**Physical Analysis:** {sim_res['explanation']}")
-    st.warning(f"**Misconception Alert:** {sim_res['misconception_note']}")
-
-    st.markdown("---")
-    st.subheader("📖 Full Syllabus NCERT Topic Revision Cards (All 20 Topics)")
-    st.caption("Detailed formula sheet and common CBSE exam traps across Light, Human Eye, Electricity, and Magnetism:")
-    
-    topic_keys = CHAPTERS[s.active_chapter]["concepts"] if s.active_chapter != "all" else list(CONCEPTS.keys())
-    sel_topic = st.selectbox(
-        "Select Topic for Quick Study Guide:",
-        options=topic_keys,
-        index=0,
-        format_func=lambda x: CONCEPTS[x]["name"],
-        key="lab_revision_topic_sel"
-    )
-    card = CONCEPT_STUDY_CARDS.get(sel_topic, {})
-    if card:
-        st.markdown(f"""
+    # =============================================================================
+    # TAB 4: ⚡ VIRTUAL LABORATORY (Circuit Lab & NCERT Formula Reference)
+    # =============================================================================
+    with subtab_lab:
+        st.markdown("""
         <div class="dribbble-card">
-          <h4>📘 {card['title']}</h4>
-          <p>{card['summary']}</p>
-          <b>Key Formulas & Relationships:</b>
+          <span class="chip chip-med">INTERACTIVE EXPERIMENTATION</span>
+          <h2 style="margin-top:6px;">⚡ Virtual Circuit Laboratory & NCERT Formula Cards</h2>
+          <p>Bust circuit misconceptions hands-on. Experiment with live sliders to observe how 
+          Series vs Parallel connections change current and equivalent resistance in real-time.</p>
+        </div>
         """, unsafe_allow_html=True)
-        for f_item in card.get("formulas", []):
-            st.code(f_item, language="text")
-        st.markdown(f"""
-          <div style="background:#FEF3C7; border-left:4px solid #F59E0B; padding:12px 16px; border-radius:8px; margin-top:10px;">
-            <b>⚠️ Common CBSE Board Exam Pitfall:</b><br>
-            {card['common_trap']}
+
+        lab_c1, lab_c2 = st.columns([1, 1])
+        with lab_c1:
+            st.markdown("#### Circuit Controls")
+            circuit_mode = st.radio(
+                "Circuit Configuration:",
+                options=["Series", "Parallel"],
+                horizontal=True,
+                key="lab_circuit_mode"
+            )
+            v_source = st.slider("Battery Voltage (V):", min_value=1.0, max_value=24.0, value=12.0, step=1.0, key="lab_v")
+            r1_val = st.slider("Resistor R1 (Ω):", min_value=1.0, max_value=50.0, value=6.0, step=1.0, key="lab_r1")
+            r2_val = st.slider("Resistor R2 (Ω):", min_value=1.0, max_value=50.0, value=12.0, step=1.0, key="lab_r2")
+
+        sim_res = simulate_circuit(circuit_mode, v_source, r1_val, r2_val)
+
+        with lab_c2:
+            st.markdown(f"#### Laboratory Readings ({sim_res['mode']} Circuit)")
+            sim_m1, sim_m2 = st.columns(2)
+            with sim_m1:
+                st.metric("Equivalent Resistance (Req)", f"{sim_res['r_eq']} Ω")
+                st.metric("Branch 1: Current / Volt", f"{sim_res['i1']} A / {sim_res['v1']} V")
+            with sim_m2:
+                st.metric("Total Circuit Current (Itot)", f"{sim_res['i_total']} A")
+                st.metric("Branch 2: Current / Volt", f"{sim_res['i2']} A / {sim_res['v2']} V")
+            st.metric("Total Circuit Power", f"{sim_res['p_total']} W", help="P = V × I")
+
+        st.info(f"**Physical Analysis:** {sim_res['explanation']}")
+        st.warning(f"**Misconception Alert:** {sim_res['misconception_note']}")
+
+        st.markdown("---")
+        st.subheader("📖 Full Syllabus NCERT Topic Revision Cards (All 20 Topics)")
+        st.caption("Detailed formula sheet and common CBSE exam traps across Light, Human Eye, Electricity, and Magnetism:")
+
+        topic_keys = CHAPTERS[s.active_chapter]["concepts"] if s.active_chapter != "all" else list(CONCEPTS.keys())
+        sel_topic = st.selectbox(
+            "Select Topic for Quick Study Guide:",
+            options=topic_keys,
+            index=0,
+            format_func=lambda x: CONCEPTS[x]["name"],
+            key="lab_revision_topic_sel"
+        )
+        card = CONCEPT_STUDY_CARDS.get(sel_topic, {})
+        if card:
+            st.markdown(f"""
+            <div class="dribbble-card">
+              <h4>📘 {card['title']}</h4>
+              <p>{card['summary']}</p>
+              <b>Key Formulas & Relationships:</b>
+            """, unsafe_allow_html=True)
+            for f_item in card.get("formulas", []):
+                st.code(f_item, language="text")
+            st.markdown(f"""
+              <div style="background:#FEF3C7; border-left:4px solid #F59E0B; padding:12px 16px; border-radius:8px; margin-top:10px;">
+                <b>⚠️ Common CBSE Board Exam Pitfall:</b><br>
+                {card['common_trap']}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+    # =============================================================================
+    # TAB 5: 📜 FINAL EVALUATION & RESULT (Essential Result Section)
+    # =============================================================================
+# =============================================================================
+# SECTION 3: 📜 FINAL EVALUATION & RESULTS
+# =============================================================================
+with tab_main_eval:
+    subtab_cert, subtab_verdict, subtab_audit = st.tabs([
+        "📜 Official Credential Certificate",
+        "📊 Chapter Proficiency Verdict",
+        "🛡️ 17-Misconception Audit & Prescription",
+    ])
+
+    with subtab_cert:
+        st.markdown("""
+        <div class="dribbble-card">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div>
+              <span class="chip chip-verified">FINAL EVALUATION & COMPETENCY RESULT</span>
+              <h2 style="margin-top:6px;">📜 CBSE Board Readiness Evaluation & Official Credential</h2>
+              <p>Comprehensive psychometric evaluation based on your Bayesian Knowledge Tracing mastery, 
+              empirical Rasch difficulty calibration, and Physics Education Research misconception clearance.</p>
+            </div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
-
-# =============================================================================
-# TAB 5: 📜 FINAL EVALUATION & RESULT (Essential Result Section)
-# =============================================================================
-with tab_eval:
-    st.markdown("""
-    <div class="dribbble-card">
-      <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-        <div>
-          <span class="chip chip-verified">FINAL EVALUATION & COMPETENCY RESULT</span>
-          <h2 style="margin-top:6px;">📜 CBSE Board Readiness Evaluation & Official Credential</h2>
-          <p>Comprehensive psychometric evaluation based on your Bayesian Knowledge Tracing mastery, 
-          empirical Rasch difficulty calibration, and Physics Education Research misconception clearance.</p>
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # 1. Official Printable Certificate Card (Section requested by User)
-    cert_html = generate_evaluation_certificate_html(
-        student_name=s.nickname or "Aarav Sharma",
-        class_code=s.class_code or "CLASS-10A",
-        readiness_score=eval_score,
-        grade_tier=eval_grade,
-        chapter_masteries=eval_ch_masteries,
-        misconceptions_cleared=eval_cleared_misc,
-        total_misconceptions=17,
-    )
-    st.components.v1.html(cert_html, height=520)
-
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-
-    # 2. Detailed Chapter-by-Chapter Proficiency Verdict
-    st.subheader("📊 Chapter-by-Chapter Board Proficiency Verdict")
-    ch_rows = []
-    for ch_id, ch_info in CHAPTERS.items():
-        ch_m = eval_ch_masteries.get(ch_id, DEFAULT_PRIOR)
-        verdict = (
-            "🟢 Board Ready (Distinction Level)" if ch_m >= 0.70 else
-            "🟡 Developing (Passable, Needs Practice)" if ch_m >= 0.40 else
-            "🔴 Critical Gap (Requires Immediate Remediation)"
+        # 1. Official Printable Certificate Card (Section requested by User)
+        cert_html = generate_evaluation_certificate_html(
+            student_name=s.nickname or "Aarav Sharma",
+            class_code=s.class_code or "CLASS-10A",
+            readiness_score=eval_score,
+            grade_tier=eval_grade,
+            chapter_masteries=eval_ch_masteries,
+            misconceptions_cleared=eval_cleared_misc,
+            total_misconceptions=17,
         )
-        ch_rows.append({
-            "Chapter": ch_info["name"],
-            "Concept Topics": len(ch_info["concepts"]),
-            "Mastery Score": f"{int(ch_m * 100)}%",
-            "Board Exam Verdict": verdict,
-        })
-    st.dataframe(pd.DataFrame(ch_rows), use_container_width=True, hide_index=True)
+        st.components.v1.html(cert_html, height=520)
 
-    # 3. Research Misconception Clearance Audit Table (All 17 Models)
-    st.subheader("🛡️ Physics Misconception Clearance Audit (17 PER Models)")
-    st.caption("Published Physics Education Research diagnostic models checked across your session:")
-    
-    audit_rows = []
-    for mid, minfo in MISCONCEPTIONS.items():
-        is_active = any(active_mid == mid for active_mid in s.active_misconceptions.values())
-        status = "⚠️ Active Trap Identified" if is_active else "🟢 Cleared / Reasoning Sound"
-        audit_rows.append({
-            "ID": mid,
-            "Research Misconception": minfo["label"],
-            "Diagnostic Status": status,
-            "Scientific Correction": minfo["correction"],
-        })
-    st.dataframe(pd.DataFrame(audit_rows), use_container_width=True, hide_index=True)
+        st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
 
-    # 4. AI Personalized Remedial Study Prescription
-    st.subheader("📋 Personalized Remedial Study Prescription")
-    # Identify weakest concepts
-    weakest_concepts = sorted(
-        [(cid, s.mastery.get(cid, DEFAULT_PRIOR)) for cid in CONCEPTS],
-        key=lambda x: x[1]
-    )[:3]
-    
-    st.markdown(f"""
-    <div class="dribbble-card" style="border-left:4px solid #2563EB;">
-      <h4>🎯 AI Pedagogical Recommendation for CBSE Board Success:</h4>
-      <ol style="margin-bottom:0;">
-        <li><b>Immediate Focus on {CONCEPTS[weakest_concepts[0][0]]['name']} ({int(weakest_concepts[0][1]*100)}% Mastery):</b> 
-        This is your lowest-scoring syllabus topic. Review the formula card in the <i>Virtual Laboratory</i> tab and practice Level 1 application problems.</li>
-        <li><b>Prerequisite Review:</b> Verify that foundational concepts ({', '.join(CONCEPTS[weakest_concepts[0][0]].get('prerequisites', [])) or 'None'}) are solid before attempting complex multi-concept numericals.</li>
-        <li><b>Active Misconceptions ({len(s.active_misconceptions)}):</b> Ensure you always articulate physical reasons rather than applying rote formulas blindly.</li>
-      </ol>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# =============================================================================
-# TAB 6: 📊 TEACHER DASHBOARD (PIN Protected, Heatmap, Reteach Plan & Export)
-# =============================================================================
-with tab_teacher:
-    configured_pin = os.environ.get("TEACHER_PIN", "teacher123")
-    try:
-        if "TEACHER_PIN" in st.secrets:
-            configured_pin = str(st.secrets["TEACHER_PIN"]).strip()
-    except Exception:
-        pass
-
-    if not s.get("teacher_auth", False):
-        st.subheader("🔒 Teacher Dashboard Access")
-        st.caption("Enter the teacher security PIN to inspect class diagnostics and analytics.")
-        
-        with st.form("teacher_login_form"):
-            entered_pin = st.text_input("Security PIN:", type="password", placeholder="Default demo PIN: teacher123")
-            pin_submit = st.form_submit_button("Unlock Dashboard", type="primary")
-            
-            if pin_submit:
-                if entered_pin.strip() == configured_pin:
-                    s.teacher_auth = True
-                    st.success("Access granted!")
-                    st.rerun()
-                else:
-                    st.error("Incorrect PIN. Please re-enter or check environment configuration.")
-    else:
-        head_col1, head_col2 = st.columns([4, 1])
-        with head_col1:
-            st.title("📊 Teacher Analytics & Class Diagnostic Dashboard")
-            st.caption("Real-time cognitive diagnostics across CBSE Class 10 Science (Physics)")
-        with head_col2:
-            if st.button("🔒 Lock Dashboard", use_container_width=True):
-                s.teacher_auth = False
-                st.rerun()
-
-        st.markdown("---")
-
-        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 3, 3])
-        with ctrl_col1:
-            db_classes = get_available_classes()
-            class_options = ["ALL"] + (db_classes if db_classes else ["CLASS-10A"])
-            selected_class = st.selectbox("Select Class Section:", options=class_options, index=0)
-
-        with ctrl_col2:
-            t_chapters = ["all"] + list(CHAPTERS.keys())
-            t_chap_labels = {
-                "all": "🌐 Full Physics (All 4 Chapters)",
-                "light": "💡 Ch 9: Light (Mirrors & Lenses)",
-                "human_eye": "👁️ Ch 10: Human Eye & World",
-                "electricity": "⚡ Ch 11: Electricity",
-                "magnetism": "🧲 Ch 12: Magnetic Effects",
-            }
-            teacher_scope = st.selectbox(
-                "Filter Chapter Scope:",
-                options=t_chapters,
-                index=0,
-                format_func=lambda x: t_chap_labels.get(x, x),
-                key="teacher_chapter_filter",
+    with subtab_verdict:
+        # 2. Detailed Chapter-by-Chapter Proficiency Verdict
+        st.subheader("📊 Chapter-by-Chapter Board Proficiency Verdict")
+        ch_rows = []
+        for ch_id, ch_info in CHAPTERS.items():
+            ch_m = eval_ch_masteries.get(ch_id, DEFAULT_PRIOR)
+            verdict = (
+                "🟢 Board Ready (Distinction Level)" if ch_m >= 0.70 else
+                "🟡 Developing (Passable, Needs Practice)" if ch_m >= 0.40 else
+                "🔴 Critical Gap (Requires Immediate Remediation)"
             )
+            ch_rows.append({
+                "Chapter": ch_info["name"],
+                "Concept Topics": len(ch_info["concepts"]),
+                "Mastery Score": f"{int(ch_m * 100)}%",
+                "Board Exam Verdict": verdict,
+            })
+        st.dataframe(pd.DataFrame(ch_rows), use_container_width=True, hide_index=True)
 
-        with ctrl_col3:
-            include_sim = st.toggle("Include simulated sample class (20 benchmark students)", value=False)
+    with subtab_audit:
+        # 3. Research Misconception Clearance Audit Table (All 17 Models)
+        st.subheader("🛡️ Physics Misconception Clearance Audit (17 PER Models)")
+        st.caption("Published Physics Education Research diagnostic models checked across your session:")
 
-        if include_sim:
-            st.warning("⚠️ **SIMULATED sample data is active:** Benchmark cohort records are labeled with `[SIMULATED]` to distinguish them from real student data.")
+        audit_rows = []
+        for mid, minfo in MISCONCEPTIONS.items():
+            is_active = any(active_mid == mid for active_mid in s.active_misconceptions.values())
+            status = "⚠️ Active Trap Identified" if is_active else "🟢 Cleared / Reasoning Sound"
+            audit_rows.append({
+                "ID": mid,
+                "Research Misconception": minfo["label"],
+                "Diagnostic Status": status,
+                "Scientific Correction": minfo["correction"],
+            })
+        st.dataframe(pd.DataFrame(audit_rows), use_container_width=True, hide_index=True)
+
+        # 4. AI Personalized Remedial Study Prescription
+        st.subheader("📋 Personalized Remedial Study Prescription")
+        # Identify weakest concepts
+        weakest_concepts = sorted(
+            [(cid, s.mastery.get(cid, DEFAULT_PRIOR)) for cid in CONCEPTS],
+            key=lambda x: x[1]
+        )[:3]
+
+        st.markdown(f"""
+        <div class="dribbble-card" style="border-left:4px solid #2563EB;">
+          <h4>🎯 AI Pedagogical Recommendation for CBSE Board Success:</h4>
+          <ol style="margin-bottom:0;">
+            <li><b>Immediate Focus on {CONCEPTS[weakest_concepts[0][0]]['name']} ({int(weakest_concepts[0][1]*100)}% Mastery):</b> 
+            This is your lowest-scoring syllabus topic. Review the formula card in the <i>Virtual Laboratory</i> tab and practice Level 1 application problems.</li>
+            <li><b>Prerequisite Review:</b> Verify that foundational concepts ({', '.join(CONCEPTS[weakest_concepts[0][0]].get('prerequisites', [])) or 'None'}) are solid before attempting complex multi-concept numericals.</li>
+            <li><b>Active Misconceptions ({len(s.active_misconceptions)}):</b> Ensure you always articulate physical reasons rather than applying rote formulas blindly.</li>
+          </ol>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+    # =============================================================================
+    # TAB 6: 📊 TEACHER DASHBOARD (PIN Protected, Heatmap, Reteach Plan & Export)
+    # =============================================================================
+# =============================================================================
+# SECTION 4: 📊 EDUCATOR & RESEARCH PORTAL
+# =============================================================================
+with tab_main_portal:
+    subtab_teacher, subtab_about = st.tabs([
+        "📊 Teacher Dashboard (PIN: teacher123)",
+        "📖 Architecture & Research Citations",
+    ])
+
+    with subtab_teacher:
+        configured_pin = os.environ.get("TEACHER_PIN", "teacher123")
+        try:
+            if "TEACHER_PIN" in st.secrets:
+                configured_pin = str(st.secrets["TEACHER_PIN"]).strip()
+        except Exception:
+            pass
+
+        if not s.get("teacher_auth", False):
+            st.subheader("🔒 Teacher Dashboard Access")
+            st.caption("Enter the teacher security PIN to inspect class diagnostics and analytics.")
+
+            with st.form("teacher_login_form"):
+                entered_pin = st.text_input("Security PIN:", type="password", placeholder="Default demo PIN: teacher123")
+                pin_submit = st.form_submit_button("Unlock Dashboard", type="primary")
+
+                if pin_submit:
+                    if entered_pin.strip() == configured_pin:
+                        s.teacher_auth = True
+                        st.success("Access granted!")
+                        st.rerun()
+                    else:
+                        st.error("Incorrect PIN. Please re-enter or check environment configuration.")
         else:
-            st.info("ℹ️ **Showing REAL student pilot data only.** Toggle above to overlay the 20-student benchmark class.")
-
-        real_data = get_real_students_mastery(selected_class if selected_class != "ALL" else None)
-        
-        live_exists = any(r.get("ID") == s.student_id for r in real_data)
-        if not live_exists and s.nickname and any(v != DEFAULT_PRIOR for v in s.mastery.values()):
-            live_record = {
-                "Student": f"{s.nickname} (Live Session)",
-                "ID": s.student_id,
-                "Class": s.class_code,
-                "Is_Simulated": False,
-            }
-            for cid in CONCEPTS:
-                live_record[cid] = round(s.mastery.get(cid, DEFAULT_PRIOR), 2)
-            real_data.append(live_record)
-
-        combined_students = list(real_data)
-        if include_sim:
-            sim_students = generate_simulated_class(20)
-            combined_students.extend(sim_students)
-
-        if not combined_students:
-            st.markdown("""
-            <div class="dribbble-card">
-              <h4>No Student Records Found</h4>
-              <p>No students have completed the diagnostic in this class yet. 
-              Students can start from the <b>Diagnostic Test</b> tab, or you can toggle on 
-              <b>'Include simulated sample class'</b> above to inspect demo data.</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            df_students = pd.DataFrame(combined_students)
-            concept_ids = CHAPTERS[teacher_scope]["concepts"] if teacher_scope != "all" else list(CONCEPTS.keys())
-            
-            avg_mastery = df_students[concept_ids].mean()
-            overall_class_avg = avg_mastery.mean()
-            
-            student_means = df_students[concept_ids].mean(axis=1)
-            at_risk_count = int((student_means < 0.50).sum())
-            total_students = len(df_students)
-
-            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-            with m_col1:
-                st.metric("Total Students Enrolled", total_students)
-            with m_col2:
-                st.metric("Cohort Average Mastery", f"{int(overall_class_avg * 100)}%")
-            with m_col3:
-                st.metric("Students At Risk (<50%)", at_risk_count, delta=f"{int((at_risk_count/total_students)*100)}% of class", delta_color="inverse")
-            with m_col4:
-                weakest_cid = avg_mastery.idxmin()
-                st.metric("Weakest Concept", CONCEPTS[weakest_cid]["name"], f"{int(avg_mastery[weakest_cid] * 100)}%")
+            head_col1, head_col2 = st.columns([4, 1])
+            with head_col1:
+                st.title("📊 Teacher Analytics & Class Diagnostic Dashboard")
+                st.caption("Real-time cognitive diagnostics across CBSE Class 10 Science (Physics)")
+            with head_col2:
+                if st.button("🔒 Lock Dashboard", use_container_width=True):
+                    s.teacher_auth = False
+                    st.rerun()
 
             st.markdown("---")
 
-            st.subheader("📈 Syllabus-Wide Mastery Breakdown")
-            tab_bar, tab_radar = st.tabs(["📊 Concept Bar Chart & At-Risk Counts", "🎯 Cohort Cognitive Radar"])
-            
-            with tab_bar:
-                c_chart1, c_chart2 = st.columns([3, 2])
-                with c_chart1:
-                    st.markdown("**Average Mastery by Concept Topic (%)**")
-                    avg_series = (avg_mastery * 100).round(1)
-                    avg_series.index = [CONCEPTS[cid]["name"] for cid in avg_series.index]
-                    st.bar_chart(avg_series, color="#2563EB", height=280)
+            ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 3, 3])
+            with ctrl_col1:
+                db_classes = get_available_classes()
+                class_options = ["ALL"] + (db_classes if db_classes else ["CLASS-10A"])
+                selected_class = st.selectbox("Select Class Section:", options=class_options, index=0)
 
-                with c_chart2:
-                    st.markdown("**Students Below 50% Threshold by Concept**")
-                    below_50 = (df_students[concept_ids] < 0.50).sum()
-                    below_df = pd.DataFrame({
-                        "Concept": [CONCEPTS[cid]["name"] for cid in concept_ids],
-                        "At-Risk Students": below_50.values,
-                        "% of Class": [f"{int((v / total_students) * 100)}%" for v in below_50.values],
-                    }).sort_values("At-Risk Students", ascending=False)
-                    st.dataframe(below_df, use_container_width=True, hide_index=True)
-
-            with tab_radar:
-                st.caption("Class-wide average competency vector compared against 70% proficiency target:")
-                c_scope_keys = concept_ids if teacher_scope != "all" else None
-                cohort_radar_svg = generate_mastery_radar_chart_svg(avg_mastery.to_dict(), concept_keys=c_scope_keys, width=540, height=440)
-                st.components.v1.html(cohort_radar_svg, height=450)
-
-            st.markdown("---")
-
-            # Student Cognitive Matrix
-            st.subheader("🗺️ Student Cognitive Matrix (Mastery Heatmap)")
-            display_cols = ["Student", "Class"] + concept_ids
-            df_display = df_students[display_cols].copy()
-            
-            column_configs = {
-                "Student": st.column_config.TextColumn("Student Nickname", width="medium"),
-                "Class": st.column_config.TextColumn("Class", width="small"),
-            }
-            for cid in concept_ids:
-                column_configs[cid] = st.column_config.ProgressColumn(
-                    CONCEPTS[cid]["name"],
-                    help=CONCEPTS[cid]["description"],
-                    min_value=0.0,
-                    max_value=1.0,
-                    format="%.0f%%",
+            with ctrl_col2:
+                t_chapters = ["all"] + list(CHAPTERS.keys())
+                t_chap_labels = {
+                    "all": "🌐 Full Physics (All 4 Chapters)",
+                    "light": "💡 Ch 9: Light (Mirrors & Lenses)",
+                    "human_eye": "👁️ Ch 10: Human Eye & World",
+                    "electricity": "⚡ Ch 11: Electricity",
+                    "magnetism": "🧲 Ch 12: Magnetic Effects",
+                }
+                teacher_scope = st.selectbox(
+                    "Filter Chapter Scope:",
+                    options=t_chapters,
+                    index=0,
+                    format_func=lambda x: t_chap_labels.get(x, x),
+                    key="teacher_chapter_filter",
                 )
 
-            st.dataframe(df_display, column_config=column_configs, use_container_width=True, hide_index=True)
+            with ctrl_col3:
+                include_sim = st.toggle("Include simulated sample class (20 benchmark students)", value=False)
 
-            # Individual Student Deep-Dive
-            with st.expander("👤 Individual Student Profile & Cognitive Deep-Dive"):
-                student_names = df_students["Student"].tolist()
-                selected_student_name = st.selectbox("Select Student to Inspect:", options=student_names, key="sel_student_drilldown")
-                sel_row = df_students[df_students["Student"] == selected_student_name].iloc[0]
-                
-                st_col1, st_col2 = st.columns([1, 1])
-                with st_col1:
-                    st.markdown(f"**Cognitive Radar: {selected_student_name}**")
-                    student_mastery_dict = {cid: float(sel_row[cid]) for cid in concept_ids}
-                    s_radar_svg = generate_mastery_radar_chart_svg(student_mastery_dict, concept_keys=c_scope_keys, width=540, height=440)
-                    st.components.v1.html(s_radar_svg, height=450)
-                with st_col2:
-                    st.markdown("##### 📌 Diagnostic Profile")
-                    s_avg = sel_row[concept_ids].mean()
-                    s_tier = "🟢 Proficient" if s_avg >= 0.70 else "🟡 Developing" if s_avg >= 0.50 else "🔴 Critical Support Needed"
-                    st.write(f"**Cognitive Status:** {s_tier} ({int(s_avg * 100)}% overall mastery)")
-                    st.write(f"**Enrolled Class:** {sel_row['Class']}")
-                    
-                    s_weak = min(concept_ids, key=lambda c: sel_row[c])
-                    s_strong = max(concept_ids, key=lambda c: sel_row[c])
-                    st.write(f"**Primary Hurdle:** {CONCEPTS[s_weak]['name']} ({int(sel_row[s_weak]*100)}%)")
-                    st.write(f"**Greatest Strength:** {CONCEPTS[s_strong]['name']} ({int(sel_row[s_strong]*100)}%)")
-                    st.info(f"Prioritize remediation on **{CONCEPTS[s_weak]['name']}** before advancing.")
-
-            st.markdown("---")
-
-            # Top Research Misconceptions Table
-            st.subheader("🔍 Identified Class Misconceptions (Reasoning-Based)")
-            real_misc_stats = get_real_misconception_stats(selected_class if selected_class != "ALL" else None)
             if include_sim:
-                sim_misc_stats = get_simulated_misconception_stats()
-                sim_map = {m["Misconception_ID"]: m["Affected_Students"] for m in sim_misc_stats}
-                combined_misc = []
-                for m in real_misc_stats:
-                    mid = m["Misconception_ID"]
-                    total_cnt = m["Affected_Students"] + sim_map.get(mid, 0)
-                    combined_misc.append({
-                        "Misconception_ID": mid,
-                        "Misconception": m["Misconception"],
-                        "Affected_Students": total_cnt,
-                        "Suggested_Teacher_Action": m["Teacher_Action"],
-                        "Correction": m["Correction"],
-                    })
-                combined_misc.sort(key=lambda x: x["Affected_Students"], reverse=True)
-                misc_table_data = combined_misc
+                st.warning("⚠️ **SIMULATED sample data is active:** Benchmark cohort records are labeled with `[SIMULATED]` to distinguish them from real student data.")
             else:
-                misc_table_data = [
-                    {
-                        "Misconception_ID": m["Misconception_ID"],
-                        "Misconception": m["Misconception"],
-                        "Affected_Students": m["Affected_Students"],
-                        "Suggested_Teacher_Action": m["Teacher_Action"],
-                        "Correction": m["Correction"],
-                    }
-                    for m in real_misc_stats
-                ]
+                st.info("ℹ️ **Showing REAL student pilot data only.** Toggle above to overlay the 20-student benchmark class.")
 
-            st.dataframe(pd.DataFrame(misc_table_data), use_container_width=True, hide_index=True)
+            real_data = get_real_students_mastery(selected_class if selected_class != "ALL" else None)
 
-            # AI Call D: Targeted Remedial Reteach Plan
-            st.markdown("---")
-            st.subheader("🤖 AI Remedial Reteach Plan Generator (Call D)")
-            if st.button("Generate Targeted Remedial Plan 📋", type="primary"):
-                with st.spinner("AI analyzing cohort aggregates and designing 5-minute activities..."):
-                    concept_dict = {cid: float(avg_mastery[cid]) for cid in concept_ids}
-                    plan = generate_reteach_plan(
-                        concept_averages=concept_dict,
-                        top_misconceptions=misc_table_data,
-                        api_key_override=s.api_key_override,
-                    )
-                    s.reteach_plan = plan
-                    st.rerun()
+            live_exists = any(r.get("ID") == s.student_id for r in real_data)
+            if not live_exists and s.nickname and any(v != DEFAULT_PRIOR for v in s.mastery.values()):
+                live_record = {
+                    "Student": f"{s.nickname} (Live Session)",
+                    "ID": s.student_id,
+                    "Class": s.class_code,
+                    "Is_Simulated": False,
+                }
+                for cid in CONCEPTS:
+                    live_record[cid] = round(s.mastery.get(cid, DEFAULT_PRIOR), 2)
+                real_data.append(live_record)
 
-            if s.get("reteach_plan"):
-                plan = s.reteach_plan
-                st.markdown(f"""
-                <div class="dribbble-card" style="border-left: 4px solid #2563EB;">
-                  <div style="display:flex; justify-content:space-between;">
-                    <h4>📋 Recommended Class Remediation Plan</h4>
-                    <small style="color:#64748B;">{"Generated by Gemini 2.5 Flash" if plan.get('is_ai') else "Verified PER Reteach Architecture"}</small>
-                  </div>
-                  <p><i>{plan.get('overview', '')}</i></p>
+            combined_students = list(real_data)
+            if include_sim:
+                sim_students = generate_simulated_class(20)
+                combined_students.extend(sim_students)
+
+            if not combined_students:
+                st.markdown("""
+                <div class="dribbble-card">
+                  <h4>No Student Records Found</h4>
+                  <p>No students have completed the diagnostic in this class yet. 
+                  Students can start from the <b>Diagnostic Test</b> tab, or you can toggle on 
+                  <b>'Include simulated sample class'</b> above to inspect demo data.</p>
                 </div>
                 """, unsafe_allow_html=True)
+            else:
+                df_students = pd.DataFrame(combined_students)
+                concept_ids = CHAPTERS[teacher_scope]["concepts"] if teacher_scope != "all" else list(CONCEPTS.keys())
 
-                for step in plan.get("lesson_plan", []):
+                avg_mastery = df_students[concept_ids].mean()
+                overall_class_avg = avg_mastery.mean()
+
+                student_means = df_students[concept_ids].mean(axis=1)
+                at_risk_count = int((student_means < 0.50).sum())
+                total_students = len(df_students)
+
+                m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+                with m_col1:
+                    st.metric("Total Students Enrolled", total_students)
+                with m_col2:
+                    st.metric("Cohort Average Mastery", f"{int(overall_class_avg * 100)}%")
+                with m_col3:
+                    st.metric("Students At Risk (<50%)", at_risk_count, delta=f"{int((at_risk_count/total_students)*100)}% of class", delta_color="inverse")
+                with m_col4:
+                    weakest_cid = avg_mastery.idxmin()
+                    st.metric("Weakest Concept", CONCEPTS[weakest_cid]["name"], f"{int(avg_mastery[weakest_cid] * 100)}%")
+
+                st.markdown("---")
+
+                st.subheader("📈 Syllabus-Wide Mastery Breakdown")
+                tab_bar, tab_radar = st.tabs(["📊 Concept Bar Chart & At-Risk Counts", "🎯 Cohort Cognitive Radar"])
+
+                with tab_bar:
+                    c_chart1, c_chart2 = st.columns([3, 2])
+                    with c_chart1:
+                        st.markdown("**Average Mastery by Concept Topic (%)**")
+                        avg_series = (avg_mastery * 100).round(1)
+                        avg_series.index = [CONCEPTS[cid]["name"] for cid in avg_series.index]
+                        st.bar_chart(avg_series, color="#2563EB", height=280)
+
+                    with c_chart2:
+                        st.markdown("**Students Below 50% Threshold by Concept**")
+                        below_50 = (df_students[concept_ids] < 0.50).sum()
+                        below_df = pd.DataFrame({
+                            "Concept": [CONCEPTS[cid]["name"] for cid in concept_ids],
+                            "At-Risk Students": below_50.values,
+                            "% of Class": [f"{int((v / total_students) * 100)}%" for v in below_50.values],
+                        }).sort_values("At-Risk Students", ascending=False)
+                        st.dataframe(below_df, use_container_width=True, hide_index=True)
+
+                with tab_radar:
+                    st.caption("Class-wide average competency vector compared against 70% proficiency target:")
+                    c_scope_keys = concept_ids if teacher_scope != "all" else None
+                    cohort_radar_svg = generate_mastery_radar_chart_svg(avg_mastery.to_dict(), concept_keys=c_scope_keys, width=540, height=440)
+                    st.components.v1.html(cohort_radar_svg, height=450)
+
+                st.markdown("---")
+
+                # Student Cognitive Matrix
+                st.subheader("🗺️ Student Cognitive Matrix (Mastery Heatmap)")
+                display_cols = ["Student", "Class"] + concept_ids
+                df_display = df_students[display_cols].copy()
+
+                column_configs = {
+                    "Student": st.column_config.TextColumn("Student Nickname", width="medium"),
+                    "Class": st.column_config.TextColumn("Class", width="small"),
+                }
+                for cid in concept_ids:
+                    column_configs[cid] = st.column_config.ProgressColumn(
+                        CONCEPTS[cid]["name"],
+                        help=CONCEPTS[cid]["description"],
+                        min_value=0.0,
+                        max_value=1.0,
+                        format="%.0f%%",
+                    )
+
+                st.dataframe(df_display, column_config=column_configs, use_container_width=True, hide_index=True)
+
+                # Individual Student Deep-Dive
+                with st.expander("👤 Individual Student Profile & Cognitive Deep-Dive"):
+                    student_names = df_students["Student"].tolist()
+                    selected_student_name = st.selectbox("Select Student to Inspect:", options=student_names, key="sel_student_drilldown")
+                    sel_row = df_students[df_students["Student"] == selected_student_name].iloc[0]
+
+                    st_col1, st_col2 = st.columns([1, 1])
+                    with st_col1:
+                        st.markdown(f"**Cognitive Radar: {selected_student_name}**")
+                        student_mastery_dict = {cid: float(sel_row[cid]) for cid in concept_ids}
+                        s_radar_svg = generate_mastery_radar_chart_svg(student_mastery_dict, concept_keys=c_scope_keys, width=540, height=440)
+                        st.components.v1.html(s_radar_svg, height=450)
+                    with st_col2:
+                        st.markdown("##### 📌 Diagnostic Profile")
+                        s_avg = sel_row[concept_ids].mean()
+                        s_tier = "🟢 Proficient" if s_avg >= 0.70 else "🟡 Developing" if s_avg >= 0.50 else "🔴 Critical Support Needed"
+                        st.write(f"**Cognitive Status:** {s_tier} ({int(s_avg * 100)}% overall mastery)")
+                        st.write(f"**Enrolled Class:** {sel_row['Class']}")
+
+                        s_weak = min(concept_ids, key=lambda c: sel_row[c])
+                        s_strong = max(concept_ids, key=lambda c: sel_row[c])
+                        st.write(f"**Primary Hurdle:** {CONCEPTS[s_weak]['name']} ({int(sel_row[s_weak]*100)}%)")
+                        st.write(f"**Greatest Strength:** {CONCEPTS[s_strong]['name']} ({int(sel_row[s_strong]*100)}%)")
+                        st.info(f"Prioritize remediation on **{CONCEPTS[s_weak]['name']}** before advancing.")
+
+                st.markdown("---")
+
+                # Top Research Misconceptions Table
+                st.subheader("🔍 Identified Class Misconceptions (Reasoning-Based)")
+                real_misc_stats = get_real_misconception_stats(selected_class if selected_class != "ALL" else None)
+                if include_sim:
+                    sim_misc_stats = get_simulated_misconception_stats()
+                    sim_map = {m["Misconception_ID"]: m["Affected_Students"] for m in sim_misc_stats}
+                    combined_misc = []
+                    for m in real_misc_stats:
+                        mid = m["Misconception_ID"]
+                        total_cnt = m["Affected_Students"] + sim_map.get(mid, 0)
+                        combined_misc.append({
+                            "Misconception_ID": mid,
+                            "Misconception": m["Misconception"],
+                            "Affected_Students": total_cnt,
+                            "Suggested_Teacher_Action": m["Teacher_Action"],
+                            "Correction": m["Correction"],
+                        })
+                    combined_misc.sort(key=lambda x: x["Affected_Students"], reverse=True)
+                    misc_table_data = combined_misc
+                else:
+                    misc_table_data = [
+                        {
+                            "Misconception_ID": m["Misconception_ID"],
+                            "Misconception": m["Misconception"],
+                            "Affected_Students": m["Affected_Students"],
+                            "Suggested_Teacher_Action": m["Teacher_Action"],
+                            "Correction": m["Correction"],
+                        }
+                        for m in real_misc_stats
+                    ]
+
+                st.dataframe(pd.DataFrame(misc_table_data), use_container_width=True, hide_index=True)
+
+                # AI Call D: Targeted Remedial Reteach Plan
+                st.markdown("---")
+                st.subheader("🤖 AI Remedial Reteach Plan Generator (Call D)")
+                if st.button("Generate Targeted Remedial Plan 📋", type="primary"):
+                    with st.spinner("AI analyzing cohort aggregates and designing 5-minute activities..."):
+                        concept_dict = {cid: float(avg_mastery[cid]) for cid in concept_ids}
+                        plan = generate_reteach_plan(
+                            concept_averages=concept_dict,
+                            top_misconceptions=misc_table_data,
+                            api_key_override=s.api_key_override,
+                        )
+                        s.reteach_plan = plan
+                        st.rerun()
+
+                if s.get("reteach_plan"):
+                    plan = s.reteach_plan
                     st.markdown(f"""
-                    <div class="dribbble-card">
-                      <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-                        <b>Step {step.get('step', 1)}: {step.get('activity_title', 'Remedial Activity')}</b>
-                        <span class="chip chip-med">⏱️ {step.get('duration_minutes', 5)} MINUTES</span>
+                    <div class="dribbble-card" style="border-left: 4px solid #2563EB;">
+                      <div style="display:flex; justify-content:space-between;">
+                        <h4>📋 Recommended Class Remediation Plan</h4>
+                        <small style="color:#64748B;">{"Generated by Gemini 2.5 Flash" if plan.get('is_ai') else "Verified PER Reteach Architecture"}</small>
                       </div>
-                      <b>Target Misconception:</b> <code>{step.get('target_misconception_id', 'M')}</code> ({step.get('focus_concept', 'Physics')})<br><br>
-                      <b>Teacher Instructions:</b><br>
-                      {step.get('teacher_instructions', '')}<br><br>
-                      <b>Socratic Check Question:</b><br>
-                      <i style="color:#1E40AF;">"{step.get('check_question', '')}"</i>
+                      <p><i>{plan.get('overview', '')}</i></p>
                     </div>
                     """, unsafe_allow_html=True)
 
-            # Empirical Item Difficulty Calibration
-            st.markdown("---")
-            st.subheader("⚙️ Empirical Question Difficulty Calibration")
-            st.caption("Rasch Model calibration: Initial curriculum label $b_0$ updates dynamically as students submit answers.")
-            cal_items = get_all_calibrated_items()
-            st.dataframe(pd.DataFrame(cal_items), use_container_width=True, hide_index=True)
+                    for step in plan.get("lesson_plan", []):
+                        st.markdown(f"""
+                        <div class="dribbble-card">
+                          <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                            <b>Step {step.get('step', 1)}: {step.get('activity_title', 'Remedial Activity')}</b>
+                            <span class="chip chip-med">⏱️ {step.get('duration_minutes', 5)} MINUTES</span>
+                          </div>
+                          <b>Target Misconception:</b> <code>{step.get('target_misconception_id', 'M')}</code> ({step.get('focus_concept', 'Physics')})<br><br>
+                          <b>Teacher Instructions:</b><br>
+                          {step.get('teacher_instructions', '')}<br><br>
+                          <b>Socratic Check Question:</b><br>
+                          <i style="color:#1E40AF;">"{step.get('check_question', '')}"</i>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-            # CSV Export
-            st.markdown("---")
-            st.subheader("📥 Export Class Report")
-            csv_content = df_students.to_csv(index=False)
-            st.download_button(
-                label="Download Class Mastery CSV",
-                data=csv_content,
-                file_name=f"conceptpilot_{selected_class}_report.csv",
-                mime="text/csv",
-                type="secondary",
-            )
+                # Empirical Item Difficulty Calibration
+                st.markdown("---")
+                st.subheader("⚙️ Empirical Question Difficulty Calibration")
+                st.caption("Rasch Model calibration: Initial curriculum label $b_0$ updates dynamically as students submit answers.")
+                cal_items = get_all_calibrated_items()
+                st.dataframe(pd.DataFrame(cal_items), use_container_width=True, hide_index=True)
+
+                # CSV Export
+                st.markdown("---")
+                st.subheader("📥 Export Class Report")
+                csv_content = df_students.to_csv(index=False)
+                st.download_button(
+                    label="Download Class Mastery CSV",
+                    data=csv_content,
+                    file_name=f"conceptpilot_{selected_class}_report.csv",
+                    mime="text/csv",
+                    type="secondary",
+                )
 
 
-# =============================================================================
-# TAB 7: 📖 ARCHITECTURE & HOW IT WORKS (Pedagogical Design & PER Citations)
-# =============================================================================
-with tab_about:
-    st.title("📖 How ConceptPilot Works")
-    st.markdown("### *Cognitive Science, Educational Data Mining & Pedagogical AI in Harmony*")
-    
-    st.markdown("""
-    <div class="dribbble-card">
-      <h4>🎯 Product Mission & Problem Understanding</h4>
-      <p>ConceptPilot is designed to bridge the gap between educational cognitive research and generative AI across 
-      the complete <b>CBSE Class 10 Science Physics Syllabus (Light, Human Eye, Electricity, and Magnetic Effects)</b> 
-      for candidates and educators. Recent educational studies and teacher interviews highlight several critical challenges in digital exam-preparation:</p>
-      <ul>
-        <li><b>Reactive vs. Diagnostic Tutors:</b> Research suggests that conversational AI chatbots tend to respond 
-        reactively to student prompts—often explaining problems away or solving them outright—rather than diagnosing 
-        the underlying knowledge structure and misconceptions of the learner.</li>
-        <li><b>The Answer-Giving vs. Abandonment Tradeoff:</b> Research indicates that tutors that simply give away answers 
-        can significantly impair retention and exam performance. Conversely, rigid tutors that only withhold answers 
-        lead to high student abandonment. ConceptPilot addresses this tension through <b>fast feedback, one targeted 
-        Socratic hint, one retry, and short cognitive loops</b>.</li>
-        <li><b>Flawed Reasoning Behind Correct Answers:</b> In standardized multiple-choice assessments, a student can 
-        easily guess the correct option while holding a deeply flawed mental model (e.g. choosing the correct lens formula answer 
-        while believing images reside on the lens glass). ConceptPilot requires a brief one-line 
-        reasoning explanation for every first attempt to detect latent misconceptions.</li>
-        <li><b>The Unreliability of LLM Difficulty Judgments:</b> Empirical evaluations demonstrate that Large Language 
-        Models are notoriously unreliable at judging or generating questions of specific psychometric difficulty. 
-        ConceptPilot separates question generation from difficulty estimation, employing an empirical <b>Rasch Item Response 
-        Theory (IRT) model</b> that calibrates item difficulty from real student outcomes.</li>
-        <li><b>CBSE Competency-Based Board Evolution:</b> The CBSE Class 10 examination framework has systematically 
-        shifted toward high-weightage application and competency-based questions across all physics units. Superficial memorization is no longer 
-        sufficient; diagnosing core conceptual understanding is essential.</li>
-      </ul>
-    </div>
-    """, unsafe_allow_html=True)
+    # =============================================================================
+    # TAB 7: 📖 ARCHITECTURE & HOW IT WORKS (Pedagogical Design & PER Citations)
+    # =============================================================================
+    with subtab_about:
+        st.title("📖 How ConceptPilot Works")
+        st.markdown("### *Cognitive Science, Educational Data Mining & Pedagogical AI in Harmony*")
 
-    # 7 Organiser Components
-    st.subheader("🧩 The 7 Mandatory Organiser Components Across All 4 Physics Chapters")
-    comp_col1, comp_col2 = st.columns(2)
-    
-    with comp_col1:
         st.markdown("""
         <div class="dribbble-card">
-          <b>1. Diagnostic Baseline Assessment</b><br>
-          A standardized baseline diagnostic across core syllabus topics in pedagogical sequence. 
-          Supports chapter-specific diagnostics or a balanced cross-chapter diagnostic covering the entire Class 10 Physics syllabus.
-        </div>
-        
-        <div class="dribbble-card">
-          <b>2. Syllabus Concept Graph</b><br>
-          A directed acyclic graph (DAG) modeling prerequisite relationships across all 20 syllabus concepts spanning 
-          Light, Human Eye, Electricity, and Magnetic Effects. Visualized live via Graphviz with real-time mastery-dependent node coloring.
-        </div>
-        
-        <div class="dribbble-card">
-          <b>3. Dynamic Learner Model (BKT)</b><br>
-          Standard 4-parameter Bayesian Knowledge Tracing (<i>P(L0)=0.30, P(G)=0.25, P(S)=0.10, P(T)=0.12</i>). 
-          Includes <b>prerequisite propagation</b> (discounting dependent mastery when foundations are weak) and a 
-          <b>30% flawed reasoning gain discount</b> when correct answers are reached via misconceptions.
-        </div>
-        
-        <div class="dribbble-card">
-          <b>4. Adaptive Question Selection & Difficulty Calibration</b><br>
-          Selects items matching student mastery thresholds (Level 1 &lt;40%, Level 2 &lt;70%, Level 3 &ge;70%), 
-          prioritizing due reviews, weak prerequisites, and active misconception traps. Calibrates psychometric 
-          difficulty parameter <i>b</i> online using Rasch IRT with Bayesian shrinkage.
+          <h4>🎯 Product Mission & Problem Understanding</h4>
+          <p>ConceptPilot is designed to bridge the gap between educational cognitive research and generative AI across 
+          the complete <b>CBSE Class 10 Science Physics Syllabus (Light, Human Eye, Electricity, and Magnetic Effects)</b> 
+          for candidates and educators. Recent educational studies and teacher interviews highlight several critical challenges in digital exam-preparation:</p>
+          <ul>
+            <li><b>Reactive vs. Diagnostic Tutors:</b> Research suggests that conversational AI chatbots tend to respond 
+            reactively to student prompts—often explaining problems away or solving them outright—rather than diagnosing 
+            the underlying knowledge structure and misconceptions of the learner.</li>
+            <li><b>The Answer-Giving vs. Abandonment Tradeoff:</b> Research indicates that tutors that simply give away answers 
+            can significantly impair retention and exam performance. Conversely, rigid tutors that only withhold answers 
+            lead to high student abandonment. ConceptPilot addresses this tension through <b>fast feedback, one targeted 
+            Socratic hint, one retry, and short cognitive loops</b>.</li>
+            <li><b>Flawed Reasoning Behind Correct Answers:</b> In standardized multiple-choice assessments, a student can 
+            easily guess the correct option while holding a deeply flawed mental model (e.g. choosing the correct lens formula answer 
+            while believing images reside on the lens glass). ConceptPilot requires a brief one-line 
+            reasoning explanation for every first attempt to detect latent misconceptions.</li>
+            <li><b>The Unreliability of LLM Difficulty Judgments:</b> Empirical evaluations demonstrate that Large Language 
+            Models are notoriously unreliable at judging or generating questions of specific psychometric difficulty. 
+            ConceptPilot separates question generation from difficulty estimation, employing an empirical <b>Rasch Item Response 
+            Theory (IRT) model</b> that calibrates item difficulty from real student outcomes.</li>
+            <li><b>CBSE Competency-Based Board Evolution:</b> The CBSE Class 10 examination framework has systematically 
+            shifted toward high-weightage application and competency-based questions across all physics units. Superficial memorization is no longer 
+            sufficient; diagnosing core conceptual understanding is essential.</li>
+          </ul>
         </div>
         """, unsafe_allow_html=True)
 
-    with comp_col2:
+        # 7 Organiser Components
+        st.subheader("🧩 The 7 Mandatory Organiser Components Across All 4 Physics Chapters")
+        comp_col1, comp_col2 = st.columns(2)
+
+        with comp_col1:
+            st.markdown("""
+            <div class="dribbble-card">
+              <b>1. Diagnostic Baseline Assessment</b><br>
+              A standardized baseline diagnostic across core syllabus topics in pedagogical sequence. 
+              Supports chapter-specific diagnostics or a balanced cross-chapter diagnostic covering the entire Class 10 Physics syllabus.
+            </div>
+
+            <div class="dribbble-card">
+              <b>2. Syllabus Concept Graph</b><br>
+              A directed acyclic graph (DAG) modeling prerequisite relationships across all 20 syllabus concepts spanning 
+              Light, Human Eye, Electricity, and Magnetic Effects. Visualized live via Graphviz with real-time mastery-dependent node coloring.
+            </div>
+
+            <div class="dribbble-card">
+              <b>3. Dynamic Learner Model (BKT)</b><br>
+              Standard 4-parameter Bayesian Knowledge Tracing (<i>P(L0)=0.30, P(G)=0.25, P(S)=0.10, P(T)=0.12</i>). 
+              Includes <b>prerequisite propagation</b> (discounting dependent mastery when foundations are weak) and a 
+              <b>30% flawed reasoning gain discount</b> when correct answers are reached via misconceptions.
+            </div>
+
+            <div class="dribbble-card">
+              <b>4. Adaptive Question Selection & Difficulty Calibration</b><br>
+              Selects items matching student mastery thresholds (Level 1 &lt;40%, Level 2 &lt;70%, Level 3 &ge;70%), 
+              prioritizing due reviews, weak prerequisites, and active misconception traps. Calibrates psychometric 
+              difficulty parameter <i>b</i> online using Rasch IRT with Bayesian shrinkage.
+            </div>
+            """, unsafe_allow_html=True)
+
+        with comp_col2:
+            st.markdown("""
+            <div class="dribbble-card">
+              <b>5. Reasoning-Based Misconception Detection</b><br>
+              Evaluates student explanations against a fixed 17-model Physics Education Research (PER) library (M1–M17) 
+              spanning Optics, Vision, Circuits, and Electromagnetism. If reasoning is ambiguous, prompts a single-sentence Socratic probe (Call C).
+            </div>
+
+            <div class="dribbble-card">
+              <b>6. Spaced Repetition Scheduling</b><br>
+              FSRS-inspired memory model tracking stability <i>S</i> and retrievability <i>R(t) = 0.9^(t/S)</i> per concept. 
+              Triggers review when retrievability drops below 90%. Features interactive fast-forward controls for testing memory decay.
+            </div>
+
+            <div class="dribbble-card">
+              <b>7. Teacher Diagnostic Dashboard</b><br>
+              PIN-protected portal displaying class-wide cognitive heatmaps, chapter-filtered concept risk distributions, misconception 
+              prevalence, empirical item calibration tables, one-click <b>AI Remedial Reteach Plans (Call D)</b>, 
+              and CSV export.
+            </div>
+            """, unsafe_allow_html=True)
+
+        # PER Reference Library
+        st.subheader("📚 Full Syllabus Research Misconception Library (M1 – M17)")
+        st.caption("Derived from seminal studies by McDermott & Shaffer (1992), Goldberg & McDermott (1987), Galili & Hazan (2000), and Maloney et al. (2001 - CSEM):")
+
+        misc_rows = []
+        for mid, m_info in MISCONCEPTIONS.items():
+            misc_rows.append({
+                "ID": mid,
+                "Misconception": m_info["label"],
+                "Scientific Correction": m_info["correction"],
+                "Teacher Action": m_info["reteach_action"],
+            })
+        st.dataframe(pd.DataFrame(misc_rows), use_container_width=True, hide_index=True)
+
+        # AI Integration & Ethics
+        st.subheader("🤖 AI Integration & Safety Architecture")
         st.markdown("""
         <div class="dribbble-card">
-          <b>5. Reasoning-Based Misconception Detection</b><br>
-          Evaluates student explanations against a fixed 17-model Physics Education Research (PER) library (M1–M17) 
-          spanning Optics, Vision, Circuits, and Electromagnetism. If reasoning is ambiguous, prompts a single-sentence Socratic probe (Call C).
-        </div>
-        
-        <div class="dribbble-card">
-          <b>6. Spaced Repetition Scheduling</b><br>
-          FSRS-inspired memory model tracking stability <i>S</i> and retrievability <i>R(t) = 0.9^(t/S)</i> per concept. 
-          Triggers review when retrievability drops below 90%. Features interactive fast-forward controls for testing memory decay.
-        </div>
-        
-        <div class="dribbble-card">
-          <b>7. Teacher Diagnostic Dashboard</b><br>
-          PIN-protected portal displaying class-wide cognitive heatmaps, chapter-filtered concept risk distributions, misconception 
-          prevalence, empirical item calibration tables, one-click <b>AI Remedial Reteach Plans (Call D)</b>, 
-          and CSV export.
+          <p>ConceptPilot integrates <b>Google Gemini 2.5 Flash</b> through the modern <code>google-genai</code> SDK 
+          with multiple layers of safety and verification:</p>
+          <ul>
+            <li><b>Dual-Pass Verification (Calls A & A2):</b> Any generated question must be solved by an independent 
+            solver pass (temperature 0.0) without access to the key. The question is only accepted if the solver matches 
+            the intended answer; otherwise, the app discards the generation and falls back to verified bank items.</li>
+            <li><b>Structured JSON Schema Enforcement:</b> All LLM outputs use <code>response_mime_type="application/json"</code> 
+            and are rigorously validated against strict Python type schemas. Unknown misconception labels are strictly rejected.</li>
+            <li><b>Prompt-Injection Defenses:</b> Student reasoning text is capped at 300 characters, wrapped in isolated 
+            untrusted XML tags, and instructed to be treated strictly as passive text data.</li>
+            <li><b>Performance & Caching:</b> Identical prompt payloads are hashed and cached in memory to minimize latency 
+            and conserve API quota.</li>
+            <li><b>Graceful Offline Fallback:</b> If no API key is provided or network errors occur, the system degrades 
+            gracefully to rule-based PER option diagnostics and bank items without throwing errors or exposing stack traces.</li>
+          </ul>
         </div>
         """, unsafe_allow_html=True)
-
-    # PER Reference Library
-    st.subheader("📚 Full Syllabus Research Misconception Library (M1 – M17)")
-    st.caption("Derived from seminal studies by McDermott & Shaffer (1992), Goldberg & McDermott (1987), Galili & Hazan (2000), and Maloney et al. (2001 - CSEM):")
-    
-    misc_rows = []
-    for mid, m_info in MISCONCEPTIONS.items():
-        misc_rows.append({
-            "ID": mid,
-            "Misconception": m_info["label"],
-            "Scientific Correction": m_info["correction"],
-            "Teacher Action": m_info["reteach_action"],
-        })
-    st.dataframe(pd.DataFrame(misc_rows), use_container_width=True, hide_index=True)
-
-    # AI Integration & Ethics
-    st.subheader("🤖 AI Integration & Safety Architecture")
-    st.markdown("""
-    <div class="dribbble-card">
-      <p>ConceptPilot integrates <b>Google Gemini 2.5 Flash</b> through the modern <code>google-genai</code> SDK 
-      with multiple layers of safety and verification:</p>
-      <ul>
-        <li><b>Dual-Pass Verification (Calls A & A2):</b> Any generated question must be solved by an independent 
-        solver pass (temperature 0.0) without access to the key. The question is only accepted if the solver matches 
-        the intended answer; otherwise, the app discards the generation and falls back to verified bank items.</li>
-        <li><b>Structured JSON Schema Enforcement:</b> All LLM outputs use <code>response_mime_type="application/json"</code> 
-        and are rigorously validated against strict Python type schemas. Unknown misconception labels are strictly rejected.</li>
-        <li><b>Prompt-Injection Defenses:</b> Student reasoning text is capped at 300 characters, wrapped in isolated 
-        untrusted XML tags, and instructed to be treated strictly as passive text data.</li>
-        <li><b>Performance & Caching:</b> Identical prompt payloads are hashed and cached in memory to minimize latency 
-        and conserve API quota.</li>
-        <li><b>Graceful Offline Fallback:</b> If no API key is provided or network errors occur, the system degrades 
-        gracefully to rule-based PER option diagnostics and bank items without throwing errors or exposing stack traces.</li>
-      </ul>
-    </div>
-    """, unsafe_allow_html=True)
