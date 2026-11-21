@@ -533,7 +533,7 @@ def compute_evaluation_metrics(mastery_dict, active_misc_dict):
 
     return score, grade, ch_masteries, cleared_count
 
-def render_diagnostic_question_view():
+def render_diagnostic_question_view(key_prefix: str = "diag"):
     """Renders the active diagnostic question, options, reasoning input, and processes submission."""
     q_count = len(s.diag_questions)
     curr_q = s.diag_questions[s.diag_idx]
@@ -554,23 +554,25 @@ def render_diagnostic_question_view():
     </div>
     """, unsafe_allow_html=True)
     
-    # Answer form
-    form_key = f"diag_form_{curr_q['id']}_{s.diag_idx}"
+    # Answer form with unique key prefix per render location
+    form_key = f"diag_form_{key_prefix}_{curr_q['id']}_{s.diag_idx}"
     with st.form(form_key):
         selected_option = st.radio(
             "Select your answer:",
             options=range(4),
             format_func=lambda idx: f"({chr(65+idx)}) {curr_q['options'][idx]}",
             index=None,
+            key=f"diag_opt_{key_prefix}_{curr_q['id']}_{s.diag_idx}",
         )
         
         reasoning = st.text_input(
             "Explain your reasoning in one line (Why did you choose this?):",
             placeholder="e.g. Because electric charge is conserved and current cannot be consumed.",
             max_chars=300,
+            key=f"diag_reason_{key_prefix}_{curr_q['id']}_{s.diag_idx}",
         )
         
-        submit_diag = st.form_submit_button("Submit Answer 🚀", type="primary")
+        submit_diag = st.form_submit_button("Submit Answer 🚀", type="primary", use_container_width=True)
         
         if submit_diag:
             if selected_option is None:
@@ -904,7 +906,7 @@ with tab_main_dash:
                 s.diag_misconceptions_found = []
                 s.diag_questions = get_diagnostic_questions(s.active_chapter if s.active_chapter != "all" else None)
                 st.rerun()
-        render_diagnostic_question_view()
+        render_diagnostic_question_view(key_prefix="dash")
 
     elif s.phase in ("diag_summary", "adapt"):
         st.success(f"✅ **Baseline Diagnostic Assessment Completed!** Starting Mastery: **{eval_score}%** (Grade Track: **{eval_grade.split('·')[0].strip()}**)")
@@ -926,9 +928,9 @@ with tab_main_dash:
         with st.form("dash_start_test_form"):
             f_col1, f_col2, f_col3 = st.columns([1, 1, 2])
             with f_col1:
-                dash_nick = st.text_input("Candidate Nickname:", value=s.nickname or "Aarav")
+                dash_nick = st.text_input("Candidate Nickname:", value=s.nickname or "Aarav", key="dash_cand_nick")
             with f_col2:
-                dash_cls = st.text_input("Class Section:", value=s.class_code or "CLASS-10A")
+                dash_cls = st.text_input("Class Section:", value=s.class_code or "CLASS-10A", key="dash_class_code")
             with f_col3:
                 scope_choices_map = {
                     "all": "🌐 Full Physics (8 Balanced Cross-Chapter Questions)",
@@ -942,9 +944,10 @@ with tab_main_dash:
                     options=list(scope_choices_map.keys()),
                     format_func=lambda x: scope_choices_map[x],
                     index=0,
+                    key="dash_scope_select",
                 )
             
-            dash_start_btn = st.form_submit_button("Launch Diagnostic Test Now 🚀", type="primary", use_container_width=True)
+            dash_start_btn = st.form_submit_button("Launch Diagnostic Test Now 🚀", type="primary", use_container_width=True, key="dash_start_btn")
             if dash_start_btn:
                 s.nickname = dash_nick.strip() or "Aarav"
                 s.class_code = dash_cls.strip() or "CLASS-10A"
@@ -1174,8 +1177,8 @@ with tab_main_practice:
 
             with st.form("start_diag_tab_form"):
                 st.markdown("#### Configure Your Diagnostic Assessment")
-                diag_nickname = st.text_input("Candidate Nickname:", value=s.nickname or "Aarav")
-                diag_class = st.text_input("Class Section:", value=s.class_code or "CLASS-10A")
+                diag_nickname = st.text_input("Candidate Nickname:", value=s.nickname or "Aarav", key="tab_diag_cand_nick")
+                diag_class = st.text_input("Class Section:", value=s.class_code or "CLASS-10A", key="tab_diag_class_code")
 
                 d_scope_choices = ["all", "light", "human_eye", "electricity", "magnetism"]
                 d_scope_labels = {
@@ -1190,9 +1193,10 @@ with tab_main_practice:
                     options=d_scope_choices,
                     format_func=lambda x: d_scope_labels[x],
                     index=0,
+                    key="tab_diag_scope_select",
                 )
 
-                start_btn = st.form_submit_button("Start Diagnostic Assessment 🚀", type="primary")
+                start_btn = st.form_submit_button("Start Diagnostic Assessment 🚀", type="primary", key="tab_diag_start_btn")
                 if start_btn:
                     s.nickname = diag_nickname.strip() or "Aarav"
                     s.class_code = diag_class.strip() or "CLASS-10A"
@@ -1214,7 +1218,7 @@ with tab_main_practice:
                     s.diag_misconceptions_found = []
                     s.diag_questions = get_diagnostic_questions(s.active_chapter if s.active_chapter != "all" else None)
                     st.rerun()
-            render_diagnostic_question_view()
+            render_diagnostic_question_view(key_prefix="practice")
 
         elif s.phase == "diag_summary":
             st.balloons()
@@ -1265,7 +1269,7 @@ with tab_main_practice:
                 st.success("✅ **No major foundational misconceptions detected!** Ready for advanced practice.")
 
             st.markdown("---")
-            if st.button("Begin Adaptive Practice 🚀", type="primary", use_container_width=True):
+            if st.button("Begin Adaptive Practice 🚀", type="primary", use_container_width=True, key="tab_diag_begin_adapt"):
                 s.phase = "adapt"
                 s.current_q = None
                 s.attempt = 0
