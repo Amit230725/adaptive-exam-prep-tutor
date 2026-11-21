@@ -684,7 +684,7 @@ def render_diagnostic_question_view(key_prefix: str = "diag"):
                 chosen=chosen,
                 correct=False,
                 reasoning="Student selected: Not Sure",
-                attempt=1,
+                attempt_num=1,
             )
             s.diag_idx += 1
             is_comp = (s.diag_idx >= q_count)
@@ -735,7 +735,7 @@ def render_diagnostic_question_view(key_prefix: str = "diag"):
                         chosen=selected_option,
                         correct=is_correct,
                         reasoning=reasoning,
-                        attempt=1,
+                        attempt_num=1,
                     )
                     if has_misc:
                         log_misconception_event(
@@ -1648,7 +1648,7 @@ with tab_main_practice:
                                     chosen=selected_opt,
                                     correct=is_correct,
                                     reasoning=why_text,
-                                    attempt=1,
+                                    attempt_num=1,
                                 )
                                 if has_misc:
                                     log_misconception_event(

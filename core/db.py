@@ -333,6 +333,18 @@ def get_diagnostic_session(student_id: str) -> Optional[Dict[str, Any]]:
 # -----------------------------------------------------------------------------
 # ATTEMPT LOGGING WITH IDEMPOTENCY (Section 17)
 # -----------------------------------------------------------------------------
+class ResponseResult(int):
+    """Integer response_id that can also be unpacked as (response_id, is_duplicate)."""
+    def __new__(cls, val: int, is_duplicate: bool = False):
+        obj = super().__new__(cls, val)
+        obj.is_duplicate = is_duplicate
+        return obj
+
+    def __iter__(self):
+        yield int(self)
+        yield self.is_duplicate
+
+
 def log_response(
     student_id: str,
     question_id: str,
@@ -345,12 +357,16 @@ def log_response(
     is_assisted: bool = False,
     attempt_num: int = 1,
     idempotency_key: Optional[str] = None,
-) -> Tuple[int, bool]:
+    attempt: Optional[int] = None,
+    **kwargs: Any,
+) -> ResponseResult:
     """
     Logs student attempt in the immutable responses table.
     Server Authoritative: Checks idempotency_key. If already submitted, returns
     existing response_id and was_duplicate=True without modifying state.
     """
+    if attempt is not None:
+        attempt_num = attempt
     with _LOCK:
         conn = get_connection()
         try:
@@ -359,7 +375,7 @@ def log_response(
                 cur.execute("SELECT id FROM responses WHERE idempotency_key = ?", (idempotency_key,))
                 existing = cur.fetchone()
                 if existing:
-                    return int(existing["id"]), True
+                    return ResponseResult(int(existing["id"]), is_duplicate=True)
 
             cur.execute("""
             INSERT INTO responses (
@@ -373,7 +389,7 @@ def log_response(
                 1 if is_assisted else 0, attempt_num, idempotency_key, time.time()
             ))
             conn.commit()
-            return int(cur.lastrowid), False
+            return ResponseResult(int(cur.lastrowid), is_duplicate=False)
         finally:
             conn.close()
 
